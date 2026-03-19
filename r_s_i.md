@@ -2046,6 +2046,862 @@ WHERE Id = @id AND LastSavedTime = @originalLastSavedTime
 | 14 | Race Condition & Concurrency | ⭐⭐⭐ Senior | Concurrency |
 | 15 | Scaling 10M+ Records | ⭐⭐⭐ Senior | System Design |
 
+# 📋 Câu Hỏi Phỏng Vấn Senior .NET Core + ReactJS — Financial CRM
+
+---
+
+## 1. Kiến Trúc & Thiết Kế Hệ Thống
+
+### Q1: Bạn sẽ thiết kế kiến trúc tổng thể cho một Financial CRM như thế nào?
+
+**Answer:**
+
+Tôi sẽ áp dụng **Clean Architecture** (hay Onion Architecture) kết hợp **CQRS pattern**:
+
+```
+├── Domain Layer          → Entities, Value Objects, Domain Events
+├── Application Layer     → Use Cases, DTOs, Interfaces, MediatR Handlers
+├── Infrastructure Layer  → EF Core, Repositories, External Services
+├── API Layer             → ASP.NET Core Web API (Controllers / Minimal APIs)
+├── Frontend              → ReactJS SPA (TypeScript)
+```
+
+- **Backend**: ASP.NET Core Web API với Clean Architecture, tách biệt rõ ràng giữa business logic và infrastructure. Sử dụng **MediatR** cho CQRS pattern — tách Command (write) và Query (read) để dễ scale và maintain.
+- **Frontend**: ReactJS + TypeScript, sử dụng **React Query** (TanStack Query) để manage server state, **Zustand** hoặc Redux Toolkit cho client state.
+- **Database**: SQL Server hoặc PostgreSQL với **Entity Framework Core** (Code-First). Áp dụng **Unit of Work pattern** để đảm bảo transaction integrity — điều cực kỳ quan trọng trong financial domain.
+- **Caching**: Redis cho session, distributed cache, và rate limiting.
+- **Message Queue**: RabbitMQ hoặc Azure Service Bus cho async processing (ví dụ: gửi email, generate reports).
+
+> Trong financial domain, tôi đặc biệt chú trọng **data consistency** (ACID transactions), **audit trail** (mọi thay đổi dữ liệu đều được log), và **idempotency** cho các API mutation.
+
+---
+
+### Q2: Bạn hiểu gì về Design Patterns? Hãy nêu các pattern bạn thường dùng trong .NET Core.
+
+**Answer:**
+
+Tôi thường xuyên sử dụng các pattern sau:
+
+| Pattern | Ứng dụng thực tế |
+|---|---|
+| **Repository + Unit of Work** | Abstraction layer trên EF Core, giúp testable và swap được data source |
+| **CQRS + MediatR** | Tách read/write operations, giảm coupling giữa controllers và business logic |
+| **Strategy Pattern** | Xử lý nhiều loại tính toán lãi suất, phí khác nhau tùy theo loại sản phẩm tài chính |
+| **Factory Pattern** | Tạo các đối tượng phức tạp như Report generators, Notification senders |
+| **Decorator Pattern** | Thêm cross-cutting concerns như logging, caching, validation vào pipeline không thay đổi core logic |
+| **Observer / Event-Driven** | Domain Events — khi một giao dịch được tạo, tự động trigger audit log, notification, reporting |
+| **Specification Pattern** | Dynamic query building cho các bộ lọc phức tạp trong CRM (filter khách hàng, giao dịch) |
+
+```csharp
+// Ví dụ: MediatR + CQRS
+public class GetCustomerByIdQuery : IRequest<CustomerDto>
+{
+    public Guid CustomerId { get; set; }
+}
+
+public class GetCustomerByIdHandler : IRequestHandler<GetCustomerByIdQuery, CustomerDto>
+{
+    private readonly ICustomerRepository _repo;
+    
+    public GetCustomerByIdHandler(ICustomerRepository repo) => _repo = repo;
+
+    public async Task<CustomerDto> Handle(GetCustomerByIdQuery request, CancellationToken ct)
+    {
+        var customer = await _repo.GetByIdAsync(request.CustomerId, ct)
+            ?? throw new NotFoundException(nameof(Customer), request.CustomerId);
+        return customer.ToDto();
+    }
+}
+```
+
+---
+
+## 2. Bảo Mật & Data Privacy
+
+### Q3: Bạn sẽ triển khai authentication và authorization như thế nào cho financial CRM?
+
+**Answer:**
+
+Tôi sẽ triển khai **multi-layered security**:
+
+**Authentication:**
+- **JWT Bearer Token** với short-lived access token (15–30 phút) + **Refresh Token** (stored encrypted trong database, với rotation policy).
+- Hỗ trợ **Multi-Factor Authentication (MFA)** — bắt buộc cho financial app. Sử dụng TOTP (Google Authenticator) hoặc SMS OTP.
+- **ASP.NET Core Identity** hoặc tích hợp **Identity Provider** (Azure AD, Keycloak) qua **OpenID Connect**.
+
+```csharp
+// JWT Configuration
+services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+    .AddJwtBearer(options =>
+    {
+        options.TokenValidationParameters = new TokenValidationParameters
+        {
+            ValidateIssuerSigningKey = true,
+            IssuerSigningKey = new SymmetricSecurityKey(key),
+            ValidateIssuer = true,
+            ValidateAudience = true,
+            ValidateLifetime = true,
+            ClockSkew = TimeSpan.Zero // Không cho phép clock skew cho financial app
+        };
+    });
+```
+
+**Authorization:**
+- **Role-Based Access Control (RBAC)** kết hợp **Policy-Based Authorization**. Ví dụ: "chỉ Manager trở lên mới được approve giao dịch trên 100 triệu".
+- **Resource-Based Authorization**: User chỉ xem được data của khách hàng mình quản lý.
+- Sử dụng **Claims-based authorization** để kiểm tra permissions granular.
+
+```csharp
+// Policy-based authorization
+services.AddAuthorization(options =>
+{
+    options.AddPolicy("CanApproveHighValueTransaction", policy =>
+        policy.RequireRole("Manager", "Director")
+              .RequireClaim("Department", "Finance"));
+              
+    options.AddPolicy("CanViewCustomerData", policy =>
+        policy.Requirements.Add(new CustomerDataAccessRequirement()));
+});
+```
+
+**Bảo vệ bổ sung:**
+- Rate limiting (AspNetCoreRateLimit) để chống brute force.
+- IP whitelist cho admin endpoints.
+- Audit log mọi login attempt (thành công và thất bại).
+- Account lockout sau N lần login sai.
+
+---
+
+### Q4: Bạn xử lý sensitive data (PII, financial data) trong ứng dụng như thế nào?
+
+**Answer:**
+
+**Data at Rest:**
+- **Column-level encryption** cho các trường nhạy cảm (số CMND, số tài khoản ngân hàng) sử dụng **Always Encrypted** của SQL Server hoặc encryption tại application layer với AES-256.
+- **Data masking** — khi hiển thị số tài khoản, chỉ show 4 số cuối: `****-****-****-1234`.
+
+**Data in Transit:**
+- Bắt buộc **HTTPS/TLS 1.2+** cho mọi communication.
+- **HSTS header** để prevent downgrade attacks.
+
+**Data in Use:**
+- Không log sensitive data ra console hay file log. Sử dụng `[SensitiveData]` attribute và custom log formatter để tự động mask.
+- Sử dụng **Data Protection API** của ASP.NET Core cho temporary sensitive data (cookie, session).
+
+```csharp
+// Ví dụ: Sensitive data masking trong model
+public class CustomerDto
+{
+    public string FullName { get; set; }
+    
+    [JsonConverter(typeof(MaskedStringConverter))]
+    public string IdentityNumber { get; set; } // Output: "***-***-1234"
+    
+    [JsonConverter(typeof(MaskedStringConverter))]  
+    public string BankAccountNumber { get; set; } // Output: "****-****-****-5678"
+}
+```
+
+**Compliance:**
+- Tuân thủ **GDPR** / **PDPA** — implement "right to be forgotten" (soft delete + data anonymization).
+- **Audit trail** cho mọi access và modification vào sensitive data — ai xem, ai sửa, lúc nào, IP nào.
+- Retention policy — tự động purge data sau thời gian quy định.
+
+---
+
+## 3. Performance & Scalability
+
+### Q5: Bạn optimize performance cho .NET Core API và ReactJS app như thế nào?
+
+**Answer:**
+
+**Backend (.NET Core):**
+
+1. **Database Optimization:**
+   - Sử dụng **compiled queries** cho EF Core với các query chạy thường xuyên.
+   - **AsNoTracking()** cho read-only queries — giảm memory overhead đáng kể.
+   - Tối ưu N+1 problem bằng **Include()** / **Split Query**.
+   - **Pagination** bắt buộc cho mọi list endpoint — dùng keyset pagination thay vì offset cho dataset lớn.
+   - Database indexing strategy — composite index, covering index dựa trên query patterns.
+
+```csharp
+// Compiled Query cho high-frequency operations
+private static readonly Func<AppDbContext, Guid, Task<Customer?>> GetCustomerById =
+    EF.CompileAsyncQuery((AppDbContext ctx, Guid id) =>
+        ctx.Customers
+           .AsNoTracking()
+           .Include(c => c.Accounts)
+           .FirstOrDefault(c => c.Id == id));
+```
+
+2. **Caching Strategy:**
+   - **Response Caching** cho static/semi-static data (danh sách ngân hàng, loại sản phẩm).
+   - **Distributed Cache (Redis)** cho frequently accessed data (customer profile, exchange rates).
+   - **Cache invalidation** strategy rõ ràng — event-driven invalidation thay vì time-based.
+
+3. **Async All The Way:**
+   - Toàn bộ I/O operations phải async — `async/await` từ Controller → Service → Repository.
+   - Tránh `.Result` hoặc `.Wait()` để không deadlock.
+
+4. **Background Processing:**
+   - Sử dụng **Hangfire** hoặc **BackgroundService** cho heavy operations (report generation, batch processing).
+
+**Frontend (ReactJS):**
+
+1. **Code Splitting** với `React.lazy()` + `Suspense` — chỉ load code cần thiết.
+2. **Memoization**: `React.memo`, `useMemo`, `useCallback` cho expensive computations.
+3. **Virtualization**: `react-window` / `react-virtuoso` cho danh sách lớn (bảng giao dịch hàng nghìn dòng).
+4. **React Query**: Automatic caching, background refetching, stale-while-revalidate.
+5. **Bundle Optimization**: Tree shaking, lazy imports, analyze với `webpack-bundle-analyzer`.
+
+---
+
+### Q6: Bạn sẽ xử lý scalability như thế nào khi số lượng users tăng lên gấp 10 lần?
+
+**Answer:**
+
+1. **Horizontal Scaling**: Containerize app với **Docker**, deploy trên **Kubernetes** hoặc **Azure App Service** với auto-scaling dựa trên CPU/memory metrics.
+
+2. **Database Scaling**:
+   - **Read Replicas**: Tách read và write — CQRS pattern giúp dễ route read queries sang replica.
+   - **Connection Pooling**: Cấu hình đúng connection pool size.
+   - **Database Sharding** nếu cần (shard theo tenant/region).
+
+3. **Caching Layer**: Redis Cluster cho distributed caching.
+
+4. **API Gateway**: Sử dụng **YARP** hoặc **Ocelot** để rate limiting, load balancing, request aggregation.
+
+5. **Async Processing**: Chuyển heavy operations sang message queue (RabbitMQ/Azure Service Bus) → background workers xử lý.
+
+6. **CDN**: Serve static frontend assets qua CDN (CloudFront, Azure CDN).
+
+```yaml
+# Docker Compose cho local development
+services:
+  api:
+    build: ./src/Api
+    environment:
+      - ConnectionStrings__Default=Server=db;Database=FinCRM;...
+      - Redis__ConnectionString=redis:6379
+    depends_on:
+      - db
+      - redis
+  
+  frontend:
+    build: ./src/Frontend
+    ports:
+      - "3000:3000"
+  
+  db:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+  
+  redis:
+    image: redis:7-alpine
+```
+
+---
+
+## 4. RESTful API & Asynchronous Programming
+
+### Q7: Bạn thiết kế RESTful API cho financial CRM theo những nguyên tắc nào?
+
+**Answer:**
+
+1. **Consistent Naming Convention**: Plural nouns, kebab-case cho multi-word resources.
+   ```
+   GET    /api/v1/customers              → Danh sách khách hàng
+   GET    /api/v1/customers/{id}         → Chi tiết khách hàng
+   POST   /api/v1/customers              → Tạo mới
+   PUT    /api/v1/customers/{id}         → Cập nhật toàn bộ
+   PATCH  /api/v1/customers/{id}         → Cập nhật một phần
+   DELETE /api/v1/customers/{id}         → Xóa (soft delete)
+   POST   /api/v1/customers/{id}/transactions → Tạo giao dịch cho KH
+   ```
+
+2. **API Versioning**: Sử dụng URL versioning (`/api/v1/`, `/api/v2/`) để backward compatible.
+
+3. **Standardized Response Format**:
+   ```json
+   {
+     "success": true,
+     "data": { ... },
+     "meta": { "page": 1, "pageSize": 20, "totalCount": 150 },
+     "errors": null,
+     "traceId": "abc-123-def"
+   }
+   ```
+
+4. **Global Exception Handling** với middleware:
+   ```csharp
+   public class GlobalExceptionMiddleware
+   {
+       public async Task InvokeAsync(HttpContext context, RequestDelegate next)
+       {
+           try { await next(context); }
+           catch (NotFoundException ex)
+           {
+               context.Response.StatusCode = 404;
+               await context.Response.WriteAsJsonAsync(ApiResponse.Fail(ex.Message));
+           }
+           catch (BusinessRuleViolationException ex)
+           {
+               context.Response.StatusCode = 422;
+               await context.Response.WriteAsJsonAsync(ApiResponse.Fail(ex.Message));
+           }
+           // ... các exception khác
+       }
+   }
+   ```
+
+5. **Idempotency**: Mỗi mutation request (POST) có `Idempotency-Key` header — đặc biệt quan trọng cho financial transactions để tránh duplicate.
+
+6. **FluentValidation** cho request validation — tách validation logic ra khỏi controller.
+
+---
+
+### Q8: Giải thích async/await trong C# và những lỗi thường gặp.
+
+**Answer:**
+
+**async/await** cho phép viết asynchronous code mà vẫn giữ được readability của synchronous code. Khi gặp `await`, thread được giải phóng trở lại thread pool (không bị block), và sẽ resume khi operation hoàn thành.
+
+**Lỗi thường gặp:**
+
+1. **Async void** — chỉ dùng cho event handlers. Mọi async method khác phải return `Task` hoặc `Task<T>`. Async void không bắt được exception.
+   ```csharp
+   // ❌ BAD
+   public async void ProcessPayment() { ... }
+   
+   // ✅ GOOD
+   public async Task ProcessPaymentAsync() { ... }
+   ```
+
+2. **Deadlock do .Result / .Wait()**:
+   ```csharp
+   // ❌ DEADLOCK trong ASP.NET (non-Core) hoặc UI thread
+   var result = SomeAsyncMethod().Result;
+   
+   // ✅ async all the way
+   var result = await SomeAsyncMethod();
+   ```
+
+3. **Quên await**:
+   ```csharp
+   // ❌ Fire-and-forget, exception bị nuốt
+   SomeAsyncMethod(); // Không có await!
+   
+   // ✅
+   await SomeAsyncMethod();
+   ```
+
+4. **Không dùng CancellationToken**: Trong financial app, user có thể cancel request dài → phải propagate CancellationToken.
+   ```csharp
+   public async Task<Report> GenerateReportAsync(ReportRequest req, CancellationToken ct)
+   {
+       var data = await _repo.GetDataAsync(req.Filters, ct);
+       ct.ThrowIfCancellationRequested();
+       return await _reportEngine.BuildAsync(data, ct);
+   }
+   ```
+
+5. **Task.WhenAll cho parallel**: Khi cần gọi nhiều API/query independent, dùng `Task.WhenAll` thay vì await tuần tự.
+   ```csharp
+   // ✅ Parallel execution
+   var customerTask = _customerService.GetAsync(id, ct);
+   var transactionsTask = _transactionService.GetByCustomerAsync(id, ct);
+   var notesTask = _noteService.GetByCustomerAsync(id, ct);
+   
+   await Task.WhenAll(customerTask, transactionsTask, notesTask);
+   ```
+
+---
+
+## 5. Database & ORM
+
+### Q9: Bạn thiết kế database schema cho Financial CRM như thế nào?
+
+**Answer:**
+
+```sql
+-- Core tables
+CREATE TABLE Customers (
+    Id UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWSEQUENTIALID(),
+    FullName NVARCHAR(200) NOT NULL,
+    Email NVARCHAR(256) NOT NULL,
+    Phone VARCHAR(20),
+    IdentityNumber VARBINARY(256),  -- Encrypted
+    CustomerType TINYINT NOT NULL,   -- Individual, Corporate
+    RiskLevel TINYINT NOT NULL,
+    AssignedToUserId UNIQUEIDENTIFIER,
+    CreatedAt DATETIMEOFFSET NOT NULL DEFAULT SYSDATETIMEOFFSET(),
+    UpdatedAt DATETIMEOFFSET,
+    IsDeleted BIT NOT NULL DEFAULT 0,
+    
+    INDEX IX_Customers_Email (Email),
+    INDEX IX_Customers_AssignedTo (AssignedToUserId) INCLUDE (FullName, Email)
+);
+
+CREATE TABLE Transactions (
+    Id UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWSEQUENTIALID(),
+    CustomerId UNIQUEIDENTIFIER NOT NULL REFERENCES Customers(Id),
+    TransactionType TINYINT NOT NULL,
+    Amount DECIMAL(18, 4) NOT NULL,     -- DECIMAL, không dùng FLOAT cho tiền!
+    Currency VARCHAR(3) NOT NULL DEFAULT 'VND',
+    Status TINYINT NOT NULL,
+    ApprovedByUserId UNIQUEIDENTIFIER,
+    CreatedAt DATETIMEOFFSET NOT NULL DEFAULT SYSDATETIMEOFFSET(),
+    
+    INDEX IX_Transactions_Customer_Date (CustomerId, CreatedAt DESC)
+);
+
+-- Audit Trail — bắt buộc trong financial domain
+CREATE TABLE AuditLogs (
+    Id BIGINT IDENTITY PRIMARY KEY,
+    UserId UNIQUEIDENTIFIER NOT NULL,
+    Action VARCHAR(50) NOT NULL,
+    EntityType VARCHAR(100) NOT NULL,
+    EntityId VARCHAR(100),
+    OldValues NVARCHAR(MAX),  -- JSON
+    NewValues NVARCHAR(MAX),  -- JSON
+    IpAddress VARCHAR(45),
+    Timestamp DATETIMEOFFSET NOT NULL DEFAULT SYSDATETIMEOFFSET()
+);
+```
+
+**Key decisions:**
+- **DECIMAL(18,4)** cho tiền — KHÔNG BAO GIỜ dùng `float` hay `double` vì floating-point precision errors.
+- **DATETIMEOFFSET** thay vì DATETIME để hỗ trợ timezone.
+- **Soft Delete** (`IsDeleted` flag) — trong financial CRM không được hard delete dữ liệu.
+- **Audit Trail table** — ghi lại mọi thay đổi (sử dụng EF Core interceptors tự động).
+- **Covering Index** — include các column thường xuyên select để tránh key lookup.
+
+---
+
+### Q10: EF Core có những limitations gì? Khi nào bạn chọn Dapper thay vì EF Core?
+
+**Answer:**
+
+**EF Core limitations:**
+- **Complex queries** — EF Core sinh ra SQL không tối ưu cho phức tạp (GROUP BY, window functions, CTE).
+- **Bulk operations** — Insert/Update hàng nghìn records rất chậm (phải dùng `EFCore.BulkExtensions`).
+- **Performance overhead** — Change tracking, translation layer thêm overhead.
+
+**Khi nào dùng Dapper:**
+- **Reporting queries** phức tạp, cần JOIN nhiều tables với aggregation.
+- **Bulk import/export** dữ liệu.
+- **Performance-critical endpoints** cần microsecond-level optimization.
+- **Stored Procedures** call.
+
+**Approach của tôi:** Dùng cả hai trong cùng project.
+```csharp
+// EF Core cho CRUD operations — leverage change tracking, migrations
+public class CustomerRepository : ICustomerRepository
+{
+    public async Task<Customer> CreateAsync(Customer customer, CancellationToken ct)
+    {
+        _context.Customers.Add(customer);
+        await _context.SaveChangesAsync(ct);
+        return customer;
+    }
+}
+
+// Dapper cho complex read queries — raw performance
+public class ReportRepository : IReportRepository
+{
+    public async Task<IEnumerable<MonthlyRevenue>> GetMonthlyRevenueAsync(int year)
+    {
+        const string sql = @"
+            SELECT MONTH(CreatedAt) as Month, 
+                   SUM(Amount) as TotalRevenue,
+                   COUNT(*) as TransactionCount
+            FROM Transactions
+            WHERE YEAR(CreatedAt) = @Year AND Status = 1
+            GROUP BY MONTH(CreatedAt)
+            ORDER BY Month";
+            
+        return await _connection.QueryAsync<MonthlyRevenue>(sql, new { Year = year });
+    }
+}
+```
+
+---
+
+## 6. ReactJS & Frontend
+
+### Q11: Bạn quản lý state trong ReactJS app lớn như thế nào?
+
+**Answer:**
+
+Tôi phân loại state thành 3 loại và dùng tool phù hợp:
+
+| State Type | Tool | Ví dụ |
+|---|---|---|
+| **Server State** | React Query (TanStack Query) | Customer data, transactions list |
+| **Client State** | Zustand hoặc Context API | UI state, theme, sidebar toggle |
+| **Form State** | React Hook Form + Zod | Form inputs, validation |
+
+```tsx
+// React Query cho server state
+const useCustomers = (filters: CustomerFilters) => {
+  return useQuery({
+    queryKey: ['customers', filters],
+    queryFn: () => customerApi.getAll(filters),
+    staleTime: 5 * 60 * 1000,   // 5 phút
+    placeholderData: keepPreviousData, // Smooth pagination
+  });
+};
+
+// Mutation với optimistic update
+const useCreateTransaction = () => {
+  const queryClient = useQueryClient();
+  
+  return useMutation({
+    mutationFn: transactionApi.create,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['transactions'] });
+      toast.success('Giao dịch tạo thành công');
+    },
+    onError: (error) => {
+      toast.error(error.message);
+    },
+  });
+};
+```
+
+**Tại sao không dùng Redux cho mọi thứ?**
+
+Redux thêm quá nhiều boilerplate cho server state. React Query handle caching, refetching, loading/error states, pagination out-of-the-box. Redux chỉ phù hợp cho complex client-side state logic (rất ít trong CRM app).
+
+---
+
+### Q12: Bạn xử lý security trên frontend (ReactJS) như thế nào?
+
+**Answer:**
+
+1. **XSS Prevention**: React tự động escape JSX, nhưng cần cẩn thận với `dangerouslySetInnerHTML` — tuyệt đối không dùng cho user input. Sử dụng **DOMPurify** nếu cần render HTML.
+
+2. **CSRF**: Sử dụng **anti-forgery token** hoặc **SameSite cookie**.
+
+3. **Token Storage**: 
+   - Lưu access token trong **memory** (biến JS), KHÔNG lưu trong localStorage (XSS vulnerable).
+   - Refresh token lưu trong **httpOnly secure cookie**.
+   
+4. **Route Protection**:
+   ```tsx
+   const ProtectedRoute = ({ children, requiredPermission }: Props) => {
+     const { user, isAuthenticated } = useAuth();
+     
+     if (!isAuthenticated) return <Navigate to="/login" />;
+     if (requiredPermission && !user.permissions.includes(requiredPermission)) {
+       return <ForbiddenPage />;
+     }
+     
+     return children;
+   };
+   ```
+
+5. **API calls**: Axios interceptor tự động attach token và handle 401 (auto refresh).
+
+6. **Content Security Policy (CSP)** header từ server.
+
+7. **Sensitive data**: Không bao giờ store sensitive financial data trong browser (localStorage, sessionStorage, Redux store).
+
+---
+
+## 7. Code Review & Team Leadership
+
+### Q13: Bạn thực hiện code review như thế nào? Criteria của bạn là gì?
+
+**Answer:**
+
+Tôi review theo checklist ưu tiên:
+
+1. ⚠️ **Security**: SQL injection? XSS? Authorization bypass? Sensitive data exposure?
+2. 🐛 **Correctness**: Logic đúng chưa? Edge cases? Null handling? Race conditions?
+3. 🏗️ **Architecture**: Có vi phạm SOLID? Coupling quá cao? Đúng layer?
+4. 🧪 **Testability**: Có unit test? Test case cover edge cases? Có mock đúng?
+5. 📖 **Readability**: Naming conventions? Method quá dài? Comments cho business logic phức tạp?
+6. ⚡ **Performance**: N+1 queries? Unnecessary allocations? Missing async?
+
+**Approach:**
+- **Không nitpick style** — dùng `.editorconfig` + `dotnet format` + ESLint/Prettier enforce style tự động.
+- **Giải thích "tại sao" thay vì chỉ nói "sửa đi"** — code review là cơ hội mentoring.
+- **Praise good code** — không chỉ comment negative.
+- **Sử dụng conventional comments**: `suggestion:`, `nitpick:`, `question:`, `issue:` để phân loại mức độ.
+
+```
+// Ví dụ comment trong PR:
+issue: Đang dùng string concatenation để build SQL query → SQL injection risk.
+Nên dùng parameterized query hoặc EF Core LINQ thay thế.
+
+suggestion: Consider dùng `ValueTask<T>` thay vì `Task<T>` cho hot path này
+vì method thường return cached result (synchronous path).
+```
+
+---
+
+### Q14: Bạn guide junior developer như thế nào khi họ gặp khó khăn?
+
+**Answer:**
+
+1. **Không đưa luôn solution** — hỏi ngược: "Em đã debug đến đâu?", "Em nghĩ root cause là gì?". Giúp họ xây dựng tư duy problem-solving.
+
+2. **Pair programming** cho complex tasks — code cùng nhau 30–60 phút hiệu quả hơn review PR sai 3 lần.
+
+3. **Architecture Decision Records (ADRs)** — document lại "tại sao chọn approach này" để junior có thể tự đọc và hiểu context.
+
+4. **Bài tập incremental**: Giao task từ nhỏ đến lớn. Ví dụ: fix bug → implement simple feature → design small module.
+
+5. **Define coding standards** rõ ràng, có template project để junior có starting point.
+
+---
+
+## 8. DevOps & CI/CD
+
+### Q15: Bạn thiết kế CI/CD pipeline cho financial CRM như thế nào?
+
+**Answer:**
+
+```yaml
+# GitHub Actions / Azure DevOps Pipeline
+stages:
+  # Stage 1: Build & Test
+  - build:
+      - dotnet restore
+      - dotnet build --no-restore
+      - dotnet test --collect:"XPlat Code Coverage" --results-directory ./coverage
+      - npm ci (frontend)
+      - npm run lint
+      - npm run test -- --coverage
+      - npm run build
+
+  # Stage 2: Security Scanning
+  - security:
+      - SAST scan (SonarQube / Snyk)
+      - Dependency vulnerability scan (dotnet list package --vulnerable)
+      - npm audit
+      - Secret scanning (detect hardcoded credentials)
+      - OWASP ZAP for DAST (staging only)
+
+  # Stage 3: Quality Gate
+  - quality-gate:
+      - Code coverage >= 80%
+      - No critical/high vulnerabilities
+      - No SonarQube blocker issues
+      - All tests pass
+
+  # Stage 4: Deploy
+  - deploy-staging:
+      - Docker build & push to registry
+      - Deploy to staging Kubernetes / Azure App Service
+      - Run integration tests + smoke tests
+      
+  - deploy-production:
+      - Manual approval required (financial app!)
+      - Blue-green deployment
+      - Health check verification
+      - Automatic rollback nếu health check fail
+```
+
+**Key points cho financial app:**
+- **Manual gate trước production** — không bao giờ auto-deploy production cho financial services.
+- **Blue-green deployment** cho zero-downtime.
+- **Database migration** chạy riêng trước khi deploy code (backward compatible migrations).
+- **Feature flags** (LaunchDarkly / custom) cho gradual rollout.
+- **Rollback plan** luôn sẵn sàng.
+
+---
+
+## 9. Troubleshooting & Problem-Solving
+
+### Q16: Bạn xử lý production incident như thế nào?
+
+**Answer:**
+
+Tôi follow framework **OODA Loop** (Observe → Orient → Decide → Act):
+
+1. **Observe**: Check monitoring dashboard (Application Insights / Datadog / Grafana).
+   - Error rate spike? Latency increase? Memory leak?
+   - Check logs (Serilog + Seq/ELK stack).
+
+2. **Orient**: Narrow scope.
+   - Specific endpoint? Specific user? Specific region?
+   - Correlate với recent deployments (rollback nếu cần).
+   - Check external dependencies (database, Redis, third-party APIs).
+
+3. **Decide**: Chọn action.
+   - **Nếu biết root cause**: Fix directly.
+   - **Nếu chưa biết**: Mitigate first (circuit breaker, disable feature flag, scale up).
+
+4. **Act & Communicate**: Fix + notify stakeholders.
+   - Hotfix → expedited code review → deploy.
+   - Post-incident report (blameless postmortem).
+
+**Tooling tôi sử dụng:**
+```csharp
+// Structured logging với Serilog
+Log.ForContext("CustomerId", customerId)
+   .ForContext("TransactionId", transactionId)
+   .Error(ex, "Failed to process transaction. Amount: {Amount}", amount);
+
+// Health checks
+services.AddHealthChecks()
+    .AddSqlServer(connectionString)
+    .AddRedis(redisConnection)
+    .AddCheck<ExternalPaymentGatewayHealthCheck>("payment-gateway");
+```
+
+---
+
+## 10. Domain-Specific Knowledge
+
+### Q17: Bạn có kinh nghiệm gì với financial services domain? Những thách thức đặc thù là gì?
+
+**Answer:**
+
+Financial domain có những yêu cầu đặc thù:
+
+1. **Precision**: Luôn dùng `decimal` (C#) / `DECIMAL` (SQL), không bao giờ `double`/`float` cho monetary values. Rounding errors dù nhỏ tích lũy lớn.
+
+2. **Audit & Compliance**: Mọi thay đổi dữ liệu phải có audit trail. Không được hard delete — chỉ soft delete + retain theo regulation (5–10 năm).
+
+3. **Idempotency**: Financial transactions phải idempotent — retry không được tạo duplicate. Dùng idempotency key.
+
+4. **Eventual Consistency vs Strong Consistency**: Tiền = strong consistency. Account balance update phải dùng **pessimistic locking** hoặc **optimistic concurrency** (row version).
+   ```csharp
+   // Optimistic concurrency
+   [ConcurrencyCheck]
+   public byte[] RowVersion { get; set; }
+   ```
+
+5. **Regulatory**: Tùy quốc gia — KYC (Know Your Customer), AML (Anti-Money Laundering). CRM phải support workflow cho verification steps.
+
+6. **Data Residency**: Dữ liệu tài chính có thể không được lưu ngoài biên giới quốc gia.
+
+---
+
+## 11. Python & Cloud (Preferred Qualifications)
+
+### Q18: Bạn sử dụng Python trong context nào kết hợp với .NET Core?
+
+**Answer:**
+
+- **Data Analytics & Reporting**: Python (pandas, matplotlib) cho heavy data analysis, generate reports phức tạp. .NET Core API trigger Python scripts qua **background job** hoặc **microservice** riêng.
+- **ML/AI Features**: Scikit-learn, TensorFlow cho customer scoring, fraud detection. Serve model qua **FastAPI** microservice, .NET Core gọi qua HTTP/gRPC.
+- **ETL Scripts**: Python cho data migration, cleaning, transformation từ legacy systems.
+- **Automation**: Script automation cho DevOps tasks, data seeding, testing utilities.
+
+---
+
+### Q19: Kinh nghiệm của bạn với Docker và containerization?
+
+**Answer:**
+
+```dockerfile
+# Multi-stage build cho .NET Core
+FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
+WORKDIR /src
+COPY ["src/Api/Api.csproj", "Api/"]
+RUN dotnet restore "Api/Api.csproj"
+COPY src/ .
+RUN dotnet publish "Api/Api.csproj" -c Release -o /app/publish
+
+FROM mcr.microsoft.com/dotnet/aspnet:8.0 AS runtime
+WORKDIR /app
+# Security: Run as non-root user
+RUN adduser --system --no-create-home apiuser
+USER apiuser
+COPY --from=build /app/publish .
+EXPOSE 8080
+ENTRYPOINT ["dotnet", "Api.dll"]
+```
+
+**Best practices:**
+- **Multi-stage build** để giảm image size.
+- **Non-root user** — bắt buộc cho financial app.
+- **.dockerignore** để không copy `node_modules`, `.git`.
+- **Health check** instruction trong Dockerfile.
+- **Docker Compose** cho local development environment (API + DB + Redis + Frontend).
+- **Container scanning** (Trivy) cho vulnerabilities.
+
+---
+
+## 12. Agile & TDD
+
+### Q20: Bạn áp dụng TDD và testing strategy như thế nào?
+
+**Answer:**
+
+Tôi follow **Testing Pyramid**:
+
+```
+        /  E2E Tests  \          ← Ít nhất (Playwright / Cypress)
+       / Integration    \        ← Vừa phải (TestServer, TestContainers)
+      /   Unit Tests      \      ← Nhiều nhất (xUnit, Moq, FluentAssertions)
+```
+
+**Unit Tests (xUnit + Moq + FluentAssertions):**
+```csharp
+[Fact]
+public async Task CreateTransaction_WithInsufficientBalance_ShouldThrowBusinessException()
+{
+    // Arrange
+    var account = new Account { Balance = 1000m };
+    _mockRepo.Setup(r => r.GetByIdAsync(It.IsAny<Guid>(), default))
+             .ReturnsAsync(account);
+
+    var command = new CreateTransactionCommand 
+    { 
+        AccountId = Guid.NewGuid(), 
+        Amount = 2000m,
+        Type = TransactionType.Debit 
+    };
+
+    // Act
+    var act = () => _handler.Handle(command, CancellationToken.None);
+
+    // Assert
+    await act.Should().ThrowAsync<InsufficientBalanceException>()
+             .WithMessage("*insufficient*");
+}
+```
+
+**Integration Tests (WebApplicationFactory + TestContainers):**
+```csharp
+public class CustomerApiTests : IClassFixture<CustomWebApplicationFactory>
+{
+    [Fact]
+    public async Task GetCustomer_WithValidId_Returns200WithCustomer()
+    {
+        var client = _factory.CreateClient();
+        var response = await client.GetAsync($"/api/v1/customers/{_testCustomerId}");
+        
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var customer = await response.Content.ReadFromJsonAsync<CustomerDto>();
+        customer.Should().NotBeNull();
+        customer!.FullName.Should().Be("Test Customer");
+    }
+}
+```
+
+**Frontend Tests (Vitest + React Testing Library):**
+```tsx
+test('should display validation error for invalid email', async () => {
+  render(<CustomerForm />);
+  
+  await userEvent.type(screen.getByLabelText(/email/i), 'invalid-email');
+  await userEvent.click(screen.getByRole('button', { name: /submit/i }));
+  
+  expect(screen.getByText(/email không hợp lệ/i)).toBeInTheDocument();
+});
+```
+
+**TDD Approach**: Red → Green → Refactor. Đặc biệt hiệu quả cho business rules phức tạp trong financial domain (tính lãi, phí, conversion rules).
+
+---
+
+> **💡 Lời khuyên cuối**: Trong phỏng vấn senior, người ta đánh giá không chỉ technical knowledge mà còn **khả năng đánh đổi (trade-offs)**, **kinh nghiệm thực tế (war stories)**, và **tư duy hệ thống (system thinking)**. Mỗi câu trả lời nên có ví dụ thực tế, nêu rõ pros/cons, và giải thích "tại sao" chọn approach đó.
+
 
 var queryFilterProducts = _unitOfWork.ProductProductCategories
             .GetAllProductInStoreActive(storeId)
