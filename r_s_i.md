@@ -1,3 +1,246 @@
+# Senior Full-Stack Developer Interview (.NET Core + ReactJS)
+
+---
+
+## I. .NET Core / C# (Back-end)
+
+### 1. `async/await` khác gì `Task.Run()`? Khi nào dùng cái nào?
+
+> `async/await` dùng cho **I/O-bound** (gọi API, query DB) — không block thread, thread trả về pool trong lúc chờ.
+> `Task.Run()` dùng cho **CPU-bound** (tính toán nặng) — đẩy sang background thread.
+> Sai lầm phổ biến: dùng `Task.Run()` wrap một async call trong controller → lãng phí thread, không có lợi gì.
+
+### 2. Middleware pipeline hoạt động thế nào? Thứ tự có quan trọng không?
+
+> Request đi qua từng middleware theo thứ tự đăng ký, response đi ngược lại. Thứ tự **rất quan trọng**: Authentication phải trước Authorization, Exception handling phải ở đầu pipeline để bắt mọi lỗi. CORS phải trước routing nếu không preflight request sẽ fail.
+
+### 3. DI Lifetime: `Scoped` vs `Transient` vs `Singleton`? Inject Scoped vào Singleton thì sao?
+
+> - **Singleton**: 1 instance toàn app (cache, config).
+> - **Scoped**: 1 instance per request (DbContext, UnitOfWork).
+> - **Transient**: mỗi lần inject tạo mới (lightweight stateless service).
+>
+> Inject Scoped vào Singleton → **Captive Dependency** → Scoped service sống mãi như Singleton → DbContext không bao giờ dispose → memory leak + stale data. Fix: inject `IServiceScopeFactory` rồi tạo scope thủ công.
+
+### 4. `IEnumerable<T>` vs `IQueryable<T>` khi query database?
+
+> - `IQueryable`: build expression tree → translate sang SQL → chạy trên DB server. Filter ở DB.
+> - `IEnumerable`: kéo toàn bộ data về memory rồi filter bằng LINQ-to-Objects.
+>
+> Luôn dùng `IQueryable` khi query DB, chỉ `.ToList()` ở bước cuối. Dùng `IEnumerable` = load hết table vào RAM.
+
+### 5. Design patterns bạn hay dùng trong .NET Core?
+
+> - **Repository + Unit of Work**: abstract DB access, dễ test. Nhưng với EF Core, DbContext đã là UoW + Repository rồi, nên chỉ thêm layer khi cần swap ORM hoặc complex query logic.
+> - **Mediator (MediatR)**: tách controller khỏi business logic, mỗi feature 1 handler. Tốt cho CQRS.
+> - **Strategy**: inject different implementations qua DI (ví dụ: nhiều payment provider).
+> - **Options Pattern**: `IOptions<T>` cho config strongly-typed.
+
+### 6. REST API versioning bạn xử lý thế nào?
+
+> Tôi prefer **URL segment versioning** (`/api/v1/users`) vì rõ ràng nhất, client dễ hiểu. Header versioning (`Api-Version: 2`) cleaner nhưng khó debug/test bằng browser. Dùng `Microsoft.AspNetCore.Mvc.Versioning` package, config `ApiVersionReader`, deprecated version cũ nhưng vẫn giữ 1-2 version trước.
+
+### 7. Clean Architecture bạn tổ chức project thế nào?
+
+> ```
+> Solution/
+>   Domain/         → Entities, Value Objects, interfaces (0 dependency)
+>   Application/    → Use cases, DTOs, validators (depend Domain)
+>   Infrastructure/ → EF Core, external services (depend Application)
+>   WebAPI/         → Controllers, middleware (depend Application + Infrastructure)
+> ```
+> Rule: dependency chỉ hướng vào trong. Domain không biết gì về DB hay HTTP.
+
+### 8. API endpoint chạy chậm (> 5s). Debug thế nào?
+
+> 1. **Logging**: check thời gian từng bước (DB, external call, processing).
+> 2. **SQL Profiler / EF Core logging**: tìm N+1 queries, missing index, full table scan.
+> 3. **Application Insights / MiniProfiler**: xem bottleneck ở đâu.
+> 4. Fix phổ biến: thêm index, dùng `Include()` thay vì lazy load, pagination, caching hot data, async external calls song song bằng `Task.WhenAll()`.
+
+### 9. Xử lý batch data lớn (hàng ngàn record)?
+
+> Không dùng `SaveChanges()` trong loop. Dùng **bulk insert** (`EFCore.BulkExtensions` hoặc `SqlBulkCopy`). Nếu transform phức tạp: load data cần thiết 1 lần vào Dictionary, xử lý in-memory, rồi bulk insert. Giảm từ N roundtrips xuống 2-3 queries tổng.
+
+---
+
+## II. ReactJS / TypeScript
+
+### 10. Virtual DOM và khi nào component re-render không cần thiết?
+
+> React tạo Virtual DOM tree mới mỗi render, diff với cây cũ, chỉ update DOM thật ở chỗ khác biệt. Re-render thừa xảy ra khi: parent re-render, context thay đổi, hoặc setState với value mới (dù giá trị giống). Fix: `React.memo` cho component, `useMemo` cho computed value, `useCallback` cho function truyền xuống child.
+
+### 11. `useMemo` vs `useCallback` vs `React.memo` — khi nào KHÔNG nên dùng?
+
+> Không nên dùng khi: component render nhanh, data nhỏ, không truyền callback xuống child list lớn. Memoization có cost (so sánh deps mỗi render). Premature optimization = complexity không cần thiết. Chỉ optimize khi đo được performance issue thực tế (React DevTools Profiler).
+
+### 12. State management trong app React lớn?
+
+> - **Local state** (`useState`): form input, UI toggle.
+> - **Context**: theme, auth, low-frequency global state.
+> - **Redux/Zustand**: complex state nhiều component share, cần middleware (async), time-travel debug. Tôi prefer **Zustand** vì ít boilerplate hơn Redux, không cần Provider wrapper.
+> - Rule: state nào gần component nhất thì để ở đó, đừng global hóa mọi thứ.
+
+### 13. Viết custom hook `useFetch<T>`?
+
+> ```typescript
+> function useFetch<T>(url: string) {
+>   const [data, setData] = useState<T | null>(null);
+>   const [loading, setLoading] = useState(true);
+>   const [error, setError] = useState<string | null>(null);
+>
+>   useEffect(() => {
+>     const controller = new AbortController();
+>     setLoading(true);
+>     fetch(url, { signal: controller.signal })
+>       .then(res => { if (!res.ok) throw new Error(res.statusText); return res.json(); })
+>       .then(setData)
+>       .catch(e => { if (e.name !== 'AbortError') setError(e.message); })
+>       .finally(() => setLoading(false));
+>     return () => controller.abort(); // cleanup on unmount or url change
+>   }, [url]);
+>
+>   return { data, loading, error };
+> }
+> ```
+> Key: AbortController để cancel request khi component unmount, tránh state update trên unmounted component.
+
+---
+
+## III. Database & SQL
+
+### 14. Top 10 khách hàng mua nhiều nhất 30 ngày — viết query và tối ưu?
+
+> ```sql
+> SELECT TOP 10 o.customer_id, SUM(oi.quantity * oi.unit_price) AS total
+> FROM Orders o
+> JOIN OrderItems oi ON oi.order_id = o.id
+> WHERE o.order_date >= DATEADD(DAY, -30, GETDATE())
+> GROUP BY o.customer_id
+> ORDER BY total DESC;
+> ```
+> Index cần: `Orders(order_date) INCLUDE (customer_id)` và `OrderItems(order_id) INCLUDE (quantity, unit_price)` — covering index tránh key lookup.
+
+### 15. N+1 problem là gì? Xử lý trong EF Core?
+
+> Load 100 orders, mỗi order lazy load OrderItems → 1 + 100 = 101 queries. Fix: **Eager loading** `.Include(o => o.OrderItems)` → 1-2 queries. Hoặc **Split Query** `.AsSplitQuery()` nếu Include nhiều collection gây Cartesian explosion. Luôn bật EF Core logging trong dev để phát hiện sớm.
+
+### 16. EF Core Migration vs Raw SQL migration trong production?
+
+> EF Migration tiện cho dev, nhưng production tôi prefer **script-based migration** (DbUp, FluentMigrator, hoặc export EF migration sang SQL script bằng `Script-Migration`). Lý do: DBA review được, rollback script rõ ràng, không phụ thuộc vào EF runtime, CI/CD pipeline chạy SQL script đơn giản hơn.
+
+---
+
+## IV. Security
+
+### 17. JWT flow và refresh token rotation?
+
+> 1. User login → server trả **access token** (short-lived, 15min) + **refresh token** (long-lived, 7 days, lưu DB).
+> 2. Access token hết hạn → client gửi refresh token lên `/auth/refresh`.
+> 3. Server verify refresh token, **revoke token cũ**, issue cặp access + refresh token mới (**rotation**).
+> 4. Nếu refresh token cũ bị dùng lại → phát hiện token theft → revoke toàn bộ family → force re-login.
+>
+> Access token lưu memory (không localStorage). Refresh token lưu httpOnly secure cookie.
+
+### 18. SQL Injection, XSS, CSRF — phòng chống?
+
+> - **SQL Injection**: parameterized queries (EF Core tự xử lý), **KHÔNG BAO GIỜ** string concatenation vào SQL.
+> - **XSS**: React tự escape output. Không dùng `dangerouslySetInnerHTML`. Server-side: encode output, CSP headers.
+> - **CSRF**: ASP.NET Core `[ValidateAntiForgeryToken]` cho MVC. SPA dùng JWT thì CSRF không phải vấn đề lớn (token không tự động gửi như cookie). Nếu dùng cookie auth → SameSite=Strict.
+
+### 19. Xử lý sensitive data (PII, credentials)?
+
+> - **At rest**: encrypt bằng AES-256. Connection strings, API keys → Azure Key Vault / AWS Secrets Manager, không lưu trong code/config.
+> - **In transit**: HTTPS everywhere, TLS 1.2+.
+> - **Trong code**: không log PII, mask data trong response (số thẻ chỉ show 4 số cuối), GDPR compliance nếu cần.
+> - DB: column-level encryption cho sensitive fields, separate audit log.
+
+---
+
+## V. DevOps / Cloud
+
+### 20. Dockerfile cho .NET Core — multi-stage build?
+
+> ```dockerfile
+> # Stage 1: Build
+> FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
+> WORKDIR /src
+> COPY *.csproj .
+> RUN dotnet restore
+> COPY . .
+> RUN dotnet publish -c Release -o /app
+>
+> # Stage 2: Runtime
+> FROM mcr.microsoft.com/dotnet/aspnet:8.0
+> WORKDIR /app
+> COPY --from=build /app .
+> ENTRYPOINT ["dotnet", "MyApp.dll"]
+> ```
+> Multi-stage: image build ~700MB (có SDK), image runtime ~200MB (chỉ ASP.NET runtime). Giảm attack surface + deploy size.
+
+### 21. CI/CD pipeline gồm những stage nào?
+
+> ```
+> Commit → Build → Unit Test → Code Analysis (SonarQube) → Docker Build
+>   → Push Registry → Deploy Staging → Integration Test → Deploy Production
+> ```
+> Feature branch → PR → merge develop → auto deploy staging. Tag release → deploy production. Rollback: deploy lại image version trước. Blue-green hoặc canary deployment cho zero-downtime.
+
+### 22. Deploy .NET Core + React lên cloud?
+
+> **Option 1 (đơn giản)**: Azure App Service (backend) + Azure Static Web Apps (React).
+> **Option 2 (container)**: Docker → AKS/ECS. React build static → CDN (CloudFront/Azure CDN).
+> **Option 3 (serverless)**: Azure Functions cho API nhỏ.
+> Database: Azure SQL / RDS. Secrets: Key Vault. Logging: Application Insights. CI/CD: GitHub Actions hoặc Azure DevOps.
+
+---
+
+## VI. System Design
+
+### 23. Thiết kế notification real-time?
+
+> **SignalR** cho .NET ecosystem (WebSocket dưới hood, fallback long-polling). Client subscribe vào hub, server push notification. Scale: **Azure SignalR Service** hoặc Redis backplane để nhiều server instance share connections. Notification lưu DB để user xem lại. Unread count cache trong Redis. Mobile: push notification qua Firebase/APNs song song.
+
+### 24. Thiết kế CRM system đơn giản?
+
+> ```
+> Tables: Contacts, Companies, Deals, Activities, Users
+> Deals: id, contact_id, company_id, stage (enum), value, expected_close_date
+> Activities: id, deal_id, contact_id, type (call/email/meeting), note, date
+> ```
+> API: `GET/POST /api/contacts`, `GET/POST /api/deals`, `PATCH /api/deals/{id}/stage`, `GET /api/deals?stage=negotiation`, `GET /api/dashboard/pipeline` (aggregate by stage). Search: full-text index trên contact name + email.
+
+### 25. Scale từ 100 req/s lên 10,000 req/s?
+
+> 1. **Caching**: Redis cho hot data, response caching cho GET endpoints.
+> 2. **Database**: read replicas, connection pooling, optimize queries + index.
+> 3. **Horizontal scale**: multiple app instances behind load balancer (sticky session off, stateless app).
+> 4. **Async processing**: message queue (RabbitMQ/SQS) cho heavy work, worker service xử lý background.
+> 5. **CDN**: static assets + API response caching ở edge.
+> 6. **Database sharding** nếu single DB không đủ.
+
+---
+
+## VII. Behavioral
+
+### 26. Kể về lần refactor codebase lớn?
+
+> *(Gợi ý trả lời)*: Mô tả context (monolith 3 năm, God class 5000 dòng), approach (refactor dần bằng Strangler Fig pattern, viết test trước khi tách, feature flag để switch), kết quả (giảm 60% bug rate, deploy time từ 2h xuống 15min). Nhấn mạnh: không big-bang rewrite, refactor từng phần có test coverage.
+
+### 27. Xử lý code review conflict?
+
+> Tập trung vào **code, không phải người**. Nếu bất đồng: đưa ra data/benchmark thay vì opinion. Nếu không quan trọng lắm (style, naming) → follow team convention, đừng block PR vì chuyện nhỏ. Nếu quan trọng (architecture, security) → escalate lên team lead, thảo luận chung.
+
+### 28. PM yêu cầu skip testing vì deadline?
+
+> Không skip test cho critical path. Đề xuất compromise: giảm scope feature thay vì giảm quality. Hoặc: ship MVP có test cho happy path, tech debt ticket cho edge cases, sprint sau trả nợ. Giải thích risk cho PM bằng ngôn ngữ business: "skip test bây giờ = production bug sau 2 tuần = mất 3 ngày hotfix + ảnh hưởng user trust".
+
+---
+
+> **📌 Tip đánh giá**: Senior thật sự sẽ trả lời kèm **trade-offs** và **kinh nghiệm thực tế**, không chỉ lý thuyết sách vở. Hỏi thêm "Bạn đã gặp case này chưa? Xử lý thế nào?" để phân biệt senior thật vs senior trên giấy.
+
+
+
 # 🎯 React Senior Interview — Hỏi & Đáp
 
 > **Format:** Interviewer hỏi → Senior trả lời ngắn gọn, đi thẳng vào bản chất.
@@ -1111,3 +1354,5 @@ Priority order:
 | Tại sao immutability quan trọng? | React dùng reference equality check — mutate object = React không biết thay đổi |
 | Synthetic Events là gì? | React wrap native events → normalize cross-browser. React 17+ gắn vào root, không document |
 | Prop drilling giải quyết bằng gì? | Context API, Zustand, Component Composition (truyền component thay vì data) |
+
+
