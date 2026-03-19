@@ -2045,3 +2045,302 @@ WHERE Id = @id AND LastSavedTime = @originalLastSavedTime
 | 13 | Expression Tree vs Reflection | ⭐⭐⭐ Senior | Performance |
 | 14 | Race Condition & Concurrency | ⭐⭐⭐ Senior | Concurrency |
 | 15 | Scaling 10M+ Records | ⭐⭐⭐ Senior | System Design |
+
+
+var queryFilterProducts = _unitOfWork.ProductProductCategories
+            .GetAllProductInStoreActive(storeId)
+            .Where(x => queryGetCategories.Select(x => x.Id).Contains(x.ProductCategoryId) 
+                && x.Product.ProductPlatforms.Select(productPlatform => productPlatform.PlatformId).Contains(EnumPlatform.StoreWebsite.ToGuid()))
+            .Select(p => new
+            {
+                CategoryId = p.ProductCategoryId,
+                ProductId = p.ProductId,
+                Product = p.Product,
+                RowNumber = EF.Functions.RowNumber(p.ProductCategoryId, EF.Functions.OrderBy(p.Id)),
+                // get last item of each category
+                RowNumberReverse =
+                    EF.Functions.RowNumber(p.ProductCategoryId, EF.Functions.OrderByDescending(p.Id))
+            })
+            .AsSubQuery()
+            .WhereIf(isLoadFirstTime, x => x.RowNumber <= _countProductsEachCategoryFirstTime)
+            .WhereIf(!isLoadFirstTime, x => x.RowNumber > _countProductsEachCategoryFirstTime)
+            .OrderBy(x => x.CategoryId)
+            .ThenBy(x => x.RowNumber);
+			
+# 🚀 Phân Tích Kỹ Thuật Tối Ưu Performance — `GetProductsStoreScrollSpyRequest`
+
+## Tổng Quan
+
+Query này lấy danh sách sản phẩm theo category cho trang Store Website, hỗ trợ **scroll-spy** (lazy load theo từng category). Đây là một query phức tạp nhưng được thiết kế rất tốt về mặt performance.
+
+---
+
+## 1. Sơ Đồ Luồng Dữ Liệu
+
+```mermaid
+flowchart TD
+    A["GetAllProductInStoreActive(storeId)"] --> B["Filter: Category + Platform"]
+    B --> C["SELECT với ROW_NUMBER()"]
+    C --> D[".AsSubQuery() — Tạo Subquery"]
+    D --> E{isLoadFirstTime?}
+    E -- "true" --> F["RowNumber <= 4"]
+    E -- "false" --> G["RowNumber > 4"]
+    F --> H["ORDER BY CategoryId, RowNumber"]
+    G --> H
+    H --> I["Materialize Products"]
+```
+
+---
+
+## 2. Các Kỹ Thuật Tối Ưu Chi Tiết
+
+### 2.1. `EF.Functions.RowNumber()` — ⭐ Trọng Tâm
+
+> [!IMPORTANT]
+> Đây là hàm từ thư viện **Thinktecture.EntityFrameworkCore.SqlServer** (không phải EF Core built-in), cho phép sử dụng hàm `ROW_NUMBER()` của SQL Server trực tiếp trong LINQ.
+
+#### SQL được sinh ra tương đương:
+
+```sql
+SELECT 
+    p.ProductCategoryId AS CategoryId,
+    p.ProductId,
+    ROW_NUMBER() OVER (PARTITION BY p.ProductCategoryId ORDER BY p.Id ASC) AS RowNumber,
+    ROW_NUMBER() OVER (PARTITION BY p.ProductCategoryId ORDER BY p.Id DESC) AS RowNumberReverse
+FROM ProductProductCategories p
+WHERE ...
+```
+
+#### Giải thích cú pháp C#:
+
+```csharp
+// ROW_NUMBER() OVER (PARTITION BY ProductCategoryId ORDER BY Id ASC)
+RowNumber = EF.Functions.RowNumber(
+    p.ProductCategoryId,                    // PARTITION BY — nhóm theo CategoryId
+    EF.Functions.OrderBy(p.Id)              // ORDER BY ASC — sắp xếp tăng dần
+)
+
+// ROW_NUMBER() OVER (PARTITION BY ProductCategoryId ORDER BY Id DESC)
+RowNumberReverse = EF.Functions.RowNumber(
+    p.ProductCategoryId,                    // PARTITION BY — nhóm theo CategoryId
+    EF.Functions.OrderByDescending(p.Id)    // ORDER BY DESC — sắp xếp giảm dần
+)
+```
+
+#### Cách hoạt động — Ví dụ minh hoạ:
+
+Giả sử có dữ liệu:
+
+| ProductCategoryId | ProductId | Product Name |
+|---|---|---|
+| Cat-A | 1 | Cà phê sữa |
+| Cat-A | 2 | Trà đào |
+| Cat-A | 3 | Matcha |
+| Cat-A | 4 | Sinh tố |
+| Cat-A | 5 | Nước cam |
+| Cat-B | 10 | Bánh mì |
+| Cat-B | 11 | Bánh flan |
+| Cat-B | 12 | Bánh bông lan |
+
+Sau khi áp dụng `ROW_NUMBER()`:
+
+| CategoryId | ProductId | Product Name | **RowNumber** | **RowNumberReverse** |
+|---|---|---|---|---|
+| Cat-A | 1 | Cà phê sữa | **1** | 5 |
+| Cat-A | 2 | Trà đào | **2** | 4 |
+| Cat-A | 3 | Matcha | **3** | 3 |
+| Cat-A | 4 | Sinh tố | **4** | 2 |
+| Cat-A | 5 | Nước cam | **5** | 1 |
+| Cat-B | 10 | Bánh mì | **1** | 3 |
+| Cat-B | 11 | Bánh flan | **2** | 2 |
+| Cat-B | 12 | Bánh bông lan | **3** | 1 |
+
+#### Tại sao tối ưu?
+
+- **Database-level pagination per group**: Thay vì load **tất cả** products về app rồi group/paginate bằng C#, query này để SQL Server thực hiện việc đánh số, filter ngay tại database.
+- **RowNumber**: Dùng để **phân trang** — lần đầu load 4 sản phẩm/category, lần sau load phần còn lại.
+- **RowNumberReverse**: Dùng để tính **tổng số sản phẩm** trong mỗi category (giá trị max = tổng sản phẩm) → tính total pages mà **không cần thêm query COUNT riêng**.
+
+---
+
+### 2.2. `.AsSubQuery()` — Ép EF Tạo Subquery
+
+```csharp
+.Select(p => new { ..., RowNumber = ..., RowNumberReverse = ... })
+.AsSubQuery()  // ← Buộc EF tạo derived table (subquery)
+.WhereIf(isLoadFirstTime, x => x.RowNumber <= 4)
+```
+
+> [!WARNING]
+> Đây cũng là method từ **Thinktecture**, không phải EF Core built-in.
+
+#### Tại sao cần `.AsSubQuery()`?
+
+Theo chuẩn SQL, **không thể dùng `WHERE` trực tiếp trên `ROW_NUMBER()`** vì window function chỉ được tính sau `WHERE`:
+
+```sql
+-- ❌ SAI — SQL Server sẽ báo lỗi
+SELECT *, ROW_NUMBER() OVER (...) AS RowNumber
+FROM Products
+WHERE RowNumber <= 4  -- LỖI: không thể filter window function ở đây
+
+-- ✅ ĐÚNG — Phải wrap trong subquery
+SELECT * FROM (
+    SELECT *, ROW_NUMBER() OVER (...) AS RowNumber
+    FROM Products
+) AS sub
+WHERE sub.RowNumber <= 4  -- OK: filter trên derived table
+```
+
+`.AsSubQuery()` buộc EF Core sinh ra cấu trúc subquery đúng chuẩn này.
+
+---
+
+### 2.3. `.WhereIf()` — Conditional Filtering
+
+```csharp
+.WhereIf(isLoadFirstTime, x => x.RowNumber <= _countProductsEachCategoryFirstTime)
+.WhereIf(!isLoadFirstTime, x => x.RowNumber > _countProductsEachCategoryFirstTime)
+```
+
+#### Cách hoạt động:
+
+| `isLoadFirstTime` | Filter được áp dụng | Ý nghĩa |
+|---|---|---|
+| `true` | `RowNumber <= 4` | Lần đầu: lấy **4 sản phẩm đầu** mỗi category |
+| `false` | `RowNumber > 4` | Lần sau: lấy **phần còn lại** |
+
+> [!TIP]
+> `WhereIf` là extension method tự tạo — tránh phải viết `if/else` rồi build query thủ công, giữ fluent chain sạch sẽ.
+
+---
+
+### 2.4. Server-side Pagination Per Category
+
+Đây là **kỹ thuật quan trọng nhất** của cả query:
+
+```
+Lần load thứ 1 (isLoadFirstTime = true):
+┌─────────────┬──────────────────────────────┐
+│   Cat-A     │ 🟢🟢🟢🟢 ⬜⬜⬜            │  ← Lấy 4 sản phẩm đầu
+│   Cat-B     │ 🟢🟢🟢🟢 ⬜⬜              │
+│   Cat-C     │ 🟢🟢🟢🟢 ⬜⬜⬜⬜⬜        │
+└─────────────┴──────────────────────────────┘
+
+Lần load thứ 2 (isLoadFirstTime = false, CategoryId = Cat-A):
+┌─────────────┬──────────────────────────────┐
+│   Cat-A     │ ⬜⬜⬜⬜ 🔵🔵🔵            │  ← Lấy phần còn lại
+└─────────────┴──────────────────────────────┘
+```
+
+#### Lợi ích performance:
+
+| Không tối ưu (naive) | Có tối ưu (current) |
+|---|---|
+| Load **tất cả** sản phẩm từ DB | Chỉ load **4 sản phẩm/category** lần đầu |
+| Paginate bằng C# (in-memory) | Paginate bằng SQL Server (database-level) |
+| Bandwidth lớn, memory cao | Bandwidth nhỏ, memory thấp |
+| Chậm khi có nhiều sản phẩm | Nhanh bất kể số lượng sản phẩm |
+
+---
+
+### 2.5. `.AsNoTracking()` — Tắt Change Tracking
+
+```csharp
+var queryGetAllCategories = _unitOfWork.ProductCategories
+    .GetAllProductCategoriesInStore(storeId).AsNoTracking();
+```
+
+> [!NOTE]
+> Tắt change tracking cho categories vì đây là query **read-only** — không cần EF theo dõi thay đổi, giảm memory overhead đáng kể.
+
+---
+
+### 2.6. Deferred Execution + Query Composition
+
+```csharp
+// Dòng 79-89: Chỉ BUILD query, chưa chạy
+var queryGetCategories = queryGetAllCategories.Where(...).Union(...).OrderBy(...);
+
+// Dòng 91-109: Tiếp tục compose trên query trước, vẫn chưa chạy
+var queryFilterProducts = _unitOfWork.ProductProductCategories
+    .GetAllProductInStoreActive(storeId)
+    .Where(x => queryGetCategories.Select(x => x.Id).Contains(x.ProductCategoryId) ...)
+    ...
+
+// Dòng 116-153: Chạy query thực sự khi gọi .ToListAsync()
+var products = await ... .ToListAsync();
+```
+
+#### Lợi ích:
+
+- EF Core sẽ **gộp tất cả** thành **một câu SQL duy nhất** gửi đến database
+- `queryGetCategories` trở thành **subquery** bên trong query products
+- Tránh N+1 query problem
+
+---
+
+### 2.7. Sử Dụng `RowNumberReverse` Để Tính Total Pages
+
+```csharp
+// Dòng 223-226
+response.ProductTotalPages = await queryFilterProducts
+    .GroupBy(c => c.CategoryId)
+    .Select(p => new { key = p.Key, page = p.Max(x => x.RowNumberReverse) })
+    .ToDictionaryAsync(x => x.key, x => x.page);
+```
+
+> [!TIP]
+> **Trick thông minh**: `Max(RowNumberReverse)` = tổng số item còn lại. Không cần query `COUNT(*)` riêng — tận dụng dữ liệu đã tính trong window function.
+
+Ví dụ cho Cat-A có 7 sản phẩm, khi `isLoadFirstTime = false` (lấy từ RowNumber 5 trở đi):
+
+| ProductId | RowNumber | RowNumberReverse |
+|---|---|---|
+| 5 | 5 | **3** |
+| 6 | 6 | 2 |
+| 7 | 7 | 1 |
+
+→ `Max(RowNumberReverse) = 3` → Còn 3 sản phẩm chưa load → Tính được total pages.
+
+---
+
+### 2.8. `Parallel.ForEach` Cho Xử Lý Thumbnail
+
+```csharp
+private void ConvertProductThumbnail(List<ProductActivatedStoreThemeModel> products)
+{
+    Parallel.ForEach(products, product =>
+    {
+        product.Thumbnail = HelperExtensions.ReplaceThumbnailImageWeb(product.Thumbnail);
+    });
+}
+```
+
+Xử lý string replacement thumbnail song song trên nhiều thread — tận dụng multi-core cho tác vụ CPU-bound.
+
+---
+
+## 3. Tổng Hợp So Sánh
+
+| Kỹ thuật | Vấn đề giải quyết | Impact |
+|---|---|---|
+| `ROW_NUMBER()` via Thinktecture | Pagination per group tại DB | 🔴 **Rất cao** |
+| `.AsSubQuery()` | Cho phép filter trên window function | 🔴 **Rất cao** |
+| `.WhereIf()` | Dynamic query building sạch sẽ | 🟡 Code quality |
+| Deferred Execution | Gộp queries thành 1 SQL | 🟠 **Cao** |
+| `.AsNoTracking()` | Giảm memory cho read-only | 🟡 **Trung bình** |
+| `RowNumberReverse` trick | Tránh thêm COUNT query | 🟠 **Cao** |
+| `Parallel.ForEach` | Tận dụng multi-core | 🟡 **Trung bình** |
+
+---
+
+## 4. Thư Viện Thinktecture
+
+> [!IMPORTANT]
+> Dự án sử dụng package **`Thinktecture.EntityFrameworkCore.SqlServer`** (v7.2.1 / v7.4.0). Đây là thư viện mở rộng EF Core, cung cấp:
+> - `EF.Functions.RowNumber()` — Window function `ROW_NUMBER()`
+> - `EF.Functions.OrderBy()` / `OrderByDescending()` — Chỉ định ORDER BY cho window function
+> - `.AsSubQuery()` — Ép EF tạo derived table / subquery
+> 
+> Những method này **không có trong EF Core vanilla** — nếu không dùng Thinktecture, bạn phải viết raw SQL.
