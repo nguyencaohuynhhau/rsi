@@ -8,11 +8,26 @@
 
 > `async/await` dùng cho **I/O-bound** (gọi API, query DB) — không block thread, thread trả về pool trong lúc chờ.
 > `Task.Run()` dùng cho **CPU-bound** (tính toán nặng) — đẩy sang background thread.
-> Sai lầm phổ biến: dùng `Task.Run()` wrap một async call trong controller → lãng phí thread, không có lợi gì.
+> Sai lầm phổ biến: dùng `Task.Run()` wrap một async call trong controller → lãng phí thread, không có lợi gì. Cụ thể: `Task.Run()` mượn 1 ThreadPool thread để giải phóng request thread — net zero gain, dưới load cao sẽ gây **thread pool starvation**.
+>
+> **Senior-level additions:**
+> - **`ValueTask<T>`** cho hot paths thường xuyên return synchronously (ví dụ: cache hit) — tránh heap allocation của Task state machine.
+> - **`ConfigureAwait(false)`**: Trong library code (NuGet packages) nên dùng để tránh capture SynchronizationContext. Trong ASP.NET Core không có SyncContext nên không cần, nhưng shared libraries consumed bởi WPF/WinForms vẫn cần.
+> - **`CancellationToken`**: Luôn propagate qua toàn bộ async chain. Nếu HTTP request bị abort, DB query cũng nên stop.
+> - **`IAsyncEnumerable<T>`**: Cho streaming large result sets, `await foreach` tránh load toàn bộ vào memory. EF Core hỗ trợ native.
 
 ### 2. Middleware pipeline hoạt động thế nào? Thứ tự có quan trọng không?
 
 > Request đi qua từng middleware theo thứ tự đăng ký, response đi ngược lại. Thứ tự **rất quan trọng**: Authentication phải trước Authorization, Exception handling phải ở đầu pipeline để bắt mọi lỗi. CORS phải trước routing nếu không preflight request sẽ fail.
+>
+> **Concrete pipeline order (.NET 8+):**
+> `ExceptionHandler → HSTS → HttpsRedirection → StaticFiles → Routing → CORS → Authentication → Authorization → Endpoint (MapControllers/MinimalAPIs)`
+>
+> **Senior-level additions:**
+> - **Terminal vs short-circuiting**: `app.Run()` là terminal (không gọi next), `app.Use()` có thể short-circuit bằng cách không gọi `next()`. `app.Map()`/`app.MapWhen()` cho branch pipelines.
+> - **Custom middleware DI**: Constructor chạy 1 lần (singleton-like), `InvokeAsync` chạy per-request. Scoped dependencies phải method-inject vào `InvokeAsync`, không constructor-inject.
+> - **Problem Details** (.NET 7+): `app.UseExceptionHandler()` + `IProblemDetailsService` cho RFC 7807 compliant error responses.
+> - **Endpoint routing**: .NET 6+ tách thành `UseRouting` (match) + `UseEndpoints` (execute), middleware ở giữa có thể inspect matched endpoint metadata.
 
 ### 3. DI Lifetime: `Scoped` vs `Transient` vs `Singleton`? Inject Scoped vào Singleton thì sao?
 
@@ -21,24 +36,61 @@
 > - **Transient**: mỗi lần inject tạo mới (lightweight stateless service).
 >
 > Inject Scoped vào Singleton → **Captive Dependency** → Scoped service sống mãi như Singleton → DbContext không bao giờ dispose → memory leak + stale data. Fix: inject `IServiceScopeFactory` rồi tạo scope thủ công.
+>
+> **Senior-level additions:**
+> - **`ValidateScopes`**: Development mode tự động bật, throw runtime error nếu resolve Scoped từ Singleton. Production tắt vì performance → cần test kỹ ở dev.
+> - **`ValidateOnBuild`** (.NET 6+): Check startup rằng mọi registered service đều resolvable — bắt missing registration trước request đầu tiên.
+> - **Transient IDisposable trap**: Transient services implement IDisposable vẫn bị tracked bởi DI scope, chỉ dispose khi scope kết thúc → accumulate memory trong long-running scopes.
+> - **Keyed Services** (.NET 8): `builder.Services.AddKeyedSingleton<ICache, RedisCache>("redis")` + `[FromKeyedServices("redis")]` — thay thế nhiều factory pattern truyền thống.
 
 ### 4. `IEnumerable<T>` vs `IQueryable<T>` khi query database?
 
 > - `IQueryable`: build expression tree → translate sang SQL → chạy trên DB server. Filter ở DB.
 > - `IEnumerable`: kéo toàn bộ data về memory rồi filter bằng LINQ-to-Objects.
 >
-> Luôn dùng `IQueryable` khi query DB, chỉ `.ToList()` ở bước cuối. Dùng `IEnumerable` = load hết table vào RAM.
+> Ưu tiên `IQueryable` khi query DB, chỉ `.ToList()` ở bước cuối. Dùng `IEnumerable` = load hết table vào RAM.
+>
+> **⚠️ Tuy nhiên "luôn dùng IQueryable" là oversimplified:**
+> - Repository trả IQueryable **leak persistence concerns** vào Application layer — couple business logic với EF Core translation capabilities. Trong Clean Architecture, nên trả materialized DTOs từ repository.
+> - **Deferred execution pitfall**: Return IQueryable từ repository, nếu DbContext đã dispose trước khi enumerate → `ObjectDisposedException`.
+> - **Expression tree translation**: Không phải mọi C# expression đều translate được sang SQL. EF Core có thể evaluate client-side hoặc throw tùy version.
+> - **Projection quan trọng hơn**: `.Select()` chỉ fetch columns cần thiết, kết hợp `AsNoTracking()` cho read-only — impact performance lớn hơn nhiều so với chỉ dùng IQueryable.
+> - **Specification Pattern** (Ardalis.Specification): Encapsulate IQueryable logic mà không leak abstraction.
+>
+> **Trade-off**: IQueryable cho flexibility nhưng leak abstraction. DTOs từ repository an toàn hơn nhưng kém linh hoạt. Chọn tùy context — CRUD app đơn giản dùng IQueryable OK, Clean Architecture nên dùng Specification hoặc materialized results.
 
 ### 5. Design patterns bạn hay dùng trong .NET Core?
 
-> - **Repository + Unit of Work**: abstract DB access, dễ test. Nhưng với EF Core, DbContext đã là UoW + Repository rồi, nên chỉ thêm layer khi cần swap ORM hoặc complex query logic.
-> - **Mediator (MediatR)**: tách controller khỏi business logic, mỗi feature 1 handler. Tốt cho CQRS.
+> - **Repository + Unit of Work**: abstract DB access, dễ test. Nhưng với EF Core, DbContext đã là UoW + Repository rồi, nên chỉ thêm layer khi cần swap ORM hoặc complex query logic. **Quan điểm cá nhân**: Wrap thêm layer thì mất EF features (change tracking, LINQ composition). Chỉ justify khi multi-ORM support hoặc testability là ưu tiên cao.
+> - **Mediator (MediatR)**: tách controller khỏi business logic, mỗi feature 1 handler. **Real power là Pipeline Behaviors** — `IPipelineBehavior<TRequest, TResponse>` cho validation (FluentValidation), logging, transaction management, caching — cross-cutting concerns mà không đụng core logic.
 > - **Strategy**: inject different implementations qua DI (ví dụ: nhiều payment provider).
-> - **Options Pattern**: `IOptions<T>` cho config strongly-typed.
+> - **Options Pattern**: `IOptions<T>` (singleton, không reload), `IOptionsSnapshot<T>` (scoped, reload per request), `IOptionsMonitor<T>` (singleton, reload on change with callback). Chọn đúng loại tùy nhu cầu.
+>
+> **Senior-level additions:**
+> - **Decorator via Scrutor**: `services.Decorate<IService, CachingDecorator>()` — wrap service với cross-cutting behavior mà không modify class gốc.
+> - **Result Pattern**: Return `Result<T>` thay vì throw exceptions cho expected failures (validation, not-found). Tránh expensive stack trace, API contract explicit hơn.
+> - **Outbox Pattern**: Reliable event publishing — write event vào DB table cùng transaction với business data, background process publish sau. Guarantee at-least-once delivery trong distributed systems.
+> - **Specification Pattern**: Dynamic query building cho complex filters, encapsulate query logic.
 
 ### 6. REST API versioning bạn xử lý thế nào?
 
-> Tôi prefer **URL segment versioning** (`/api/v1/users`) vì rõ ràng nhất, client dễ hiểu. Header versioning (`Api-Version: 2`) cleaner nhưng khó debug/test bằng browser. Dùng `Microsoft.AspNetCore.Mvc.Versioning` package, config `ApiVersionReader`, deprecated version cũ nhưng vẫn giữ 1-2 version trước.
+> Tôi prefer **URL segment versioning** (`/api/v1/users`) vì rõ ràng nhất, client dễ hiểu. Header versioning (`Api-Version: 2`) cleaner nhưng khó debug/test bằng browser.
+>
+> **⚠️ Package update**: `Microsoft.AspNetCore.Mvc.Versioning` là package cũ. Từ .NET 7+ dùng **`Asp.Versioning.Mvc`** và **`Asp.Versioning.Mvc.ApiExplorer`** (cùng tác giả, namespace mới).
+>
+> **Versioning strategies với trade-offs:**
+> | Strategy | Ưu điểm | Nhược điểm |
+> |---|---|---|
+> | URL segment `/api/v1/` | Rõ ràng, dễ debug | Pollute route table, hypermedia links phụ thuộc version |
+> | Query string `?api-version=1.0` | Dễ dùng | Ugly, non-RESTful |
+> | Header `api-version: 1.0` | Clean URL | Invisible trong browser, cần Vary header cho cache |
+> | Media type `Accept: vnd.company.v1+json` | Đúng chuẩn REST nhất | Phức tạp nhất |
+>
+> **Deprecation strategy**: `[ApiVersion("1.0", Deprecated = true)]` attribute, Sunset headers (RFC 8594), policy support N-2 versions với 6-month deprecation notice.
+>
+> **Breaking vs non-breaking**: Thêm nullable field = non-breaking. Xóa/rename/đổi type field = breaking → cần new version. Non-breaking changes **không cần** version mới.
+>
+> **Minimal API** (.NET 7+): Dùng `ApiVersionSet` + `WithApiVersionSet()`, config khác controller-based versioning.
 
 ### 7. Clean Architecture bạn tổ chức project thế nào?
 
@@ -50,6 +102,16 @@
 >   WebAPI/         → Controllers, middleware (depend Application + Infrastructure)
 > ```
 > Rule: dependency chỉ hướng vào trong. Domain không biết gì về DB hay HTTP.
+>
+> **Chi tiết từng layer:**
+> - **Domain**: Entities, Value Objects, Domain Events, Enumerations, Domain Exceptions. **0 dependency NuGet** (trừ primitives).
+> - **Application**: Use Cases (Command/Query handlers), DTOs, Interfaces (IRepository, IEmailService), Validators, Mapping. Chỉ reference Domain.
+> - **Infrastructure**: EF Core DbContext, Repository implementations, External service clients, File storage. Reference Application + Domain.
+> - **WebAPI**: Controllers/Minimal APIs, Middleware, Swagger, **Composition Root** (DI registration `services.AddInfrastructure(config)`).
+>
+> **Khi nào Clean Architecture là overkill?** CRUD apps, prototypes, microservices nhỏ (5 endpoints). Alternative: **Vertical Slice Architecture** (tổ chức theo feature, không theo layer) — productive hơn cho simple services.
+>
+> **Testing per layer**: Domain → pure unit test, no mocks. Application → unit test với mocked interfaces. Infrastructure → integration test với real DB (Testcontainers). WebAPI → integration test với `WebApplicationFactory`.
 
 ### 8. API endpoint chạy chậm (> 5s). Debug thế nào?
 
@@ -57,10 +119,27 @@
 > 2. **SQL Profiler / EF Core logging**: tìm N+1 queries, missing index, full table scan.
 > 3. **Application Insights / MiniProfiler**: xem bottleneck ở đâu.
 > 4. Fix phổ biến: thêm index, dùng `Include()` thay vì lazy load, pagination, caching hot data, async external calls song song bằng `Task.WhenAll()`.
+>
+> **Senior-level debugging tools:**
+> - **`ToQueryString()`** trên IQueryable để xem generated SQL mà không execute.
+> - **EF Core logging**: `optionsBuilder.LogTo(Console.WriteLine).EnableSensitiveDataLogging()` trong dev.
+> - **OpenTelemetry**: Distributed tracing với `Activity`/`ActivitySource` cho per-operation timing across services (thay thế Application Insights trong modern .NET).
+> - **`dotnet-counters`**: Real-time ThreadPool, GC, request metrics. `dotnet-dump`/`dotnet-gcdump` cho memory analysis.
+> - **Connection pool exhaustion**: Default max 100 SqlConnection. Symptom: requests hang đúng 15s rồi fail. Check bằng performance counter `NumberOfFreeConnections`.
 
 ### 9. Xử lý batch data lớn (hàng ngàn record)?
 
 > Không dùng `SaveChanges()` trong loop. Dùng **bulk insert** (`EFCore.BulkExtensions` hoặc `SqlBulkCopy`). Nếu transform phức tạp: load data cần thiết 1 lần vào Dictionary, xử lý in-memory, rồi bulk insert. Giảm từ N roundtrips xuống 2-3 queries tổng.
+>
+> **Benchmark thực tế**: `SaveChanges()` per record × 10,000 records ≈ 30-60s. `BulkInsert` cùng dataset < 1s.
+>
+> **Senior-level additions:**
+> - **EF Core 7+ `ExecuteUpdate`/`ExecuteDelete`** (native, không cần library): `context.Products.Where(p => p.Price < 10).ExecuteDeleteAsync()` → 1 SQL DELETE statement, không load entity.
+> - **Chunking**: Batch > 100k records → process theo chunks 1,000-5,000 (`records.Chunk(1000)`) để tránh transaction log bloat và lock escalation.
+> - **`SqlBulkCopy` tuning**: Set `BatchSize`, `BulkCopyTimeout`, `SqlBulkCopyOptions.TableLock` cho max throughput. Map columns explicitly với `ColumnMappings` tránh silent data corruption.
+> - **Background processing**: Job lớn → offload sang `IHostedService` hoặc Hangfire. Return 202 Accepted + job ID, client poll status.
+> - **Memory**: Load 100k+ records → dùng `AsNoTracking().ToDictionaryAsync()`. Extreme cases → Dapper để tránh materialization overhead.
+> - **Transaction isolation**: Batch import có thể dùng `IsolationLevel.ReadUncommitted` hoặc Snapshot Isolation tránh blocking concurrent reads.
 
 ---
 
@@ -135,18 +214,32 @@
 
 ### 17. JWT flow và refresh token rotation?
 
-> 1. User login → server trả **access token** (short-lived, 15min) + **refresh token** (long-lived, 7 days, lưu DB).
+> 1. User login → server trả **access token** (short-lived, 15-30min) + **refresh token** (long-lived, 7-30 days, lưu DB **hashed SHA-256**, không plaintext).
 > 2. Access token hết hạn → client gửi refresh token lên `/auth/refresh`.
 > 3. Server verify refresh token, **revoke token cũ**, issue cặp access + refresh token mới (**rotation**).
 > 4. Nếu refresh token cũ bị dùng lại → phát hiện token theft → revoke toàn bộ family → force re-login.
 >
 > Access token lưu memory (không localStorage). Refresh token lưu httpOnly secure cookie.
+>
+> **Senior-level additions:**
+> - **JWT stateless limitation**: JWT không thể revoke mà không có server-side state. Options: short expiry (chờ hết hạn), token blacklist trong Redis (check mỗi request — mất lợi thế stateless), hoặc `jti` claim check against revocation list.
+> - **Refresh token storage trên server**: Lưu hashed (SHA-256) + user ID, expiry, device fingerprint, IP, `isRevoked` flag.
+> - **.NET config**: `ClockSkew = TimeSpan.Zero` trong `TokenValidationParameters` — bỏ default 5-min grace period. Custom `JwtBearerEvents.OnTokenValidated` cho additional checks.
+> - **BFF (Backend for Frontend) Pattern**: Emerging best practice cho SPAs — BFF proxy giữ tokens server-side, SPA chỉ dùng session cookie tới BFF. Loại bỏ hoàn toàn XSS token theft. Library: Duende.BFF.
+> - **Key management**: Signing key lưu Azure Key Vault / AWS KMS, **KHÔNG** hardcode. Xem xét RSA (asymmetric) cho microservices — services validate token mà không cần signing key.
 
 ### 18. SQL Injection, XSS, CSRF — phòng chống?
 
-> - **SQL Injection**: parameterized queries (EF Core tự xử lý), **KHÔNG BAO GIỜ** string concatenation vào SQL.
-> - **XSS**: React tự escape output. Không dùng `dangerouslySetInnerHTML`. Server-side: encode output, CSP headers.
-> - **CSRF**: ASP.NET Core `[ValidateAntiForgeryToken]` cho MVC. SPA dùng JWT thì CSRF không phải vấn đề lớn (token không tự động gửi như cookie). Nếu dùng cookie auth → SameSite=Strict.
+> - **SQL Injection**: parameterized queries (EF Core LINQ tự parameterize), **KHÔNG BAO GIỜ** string concatenation vào SQL.
+>   - **⚠️ Quan trọng**: `FromSqlRaw($"SELECT * FROM Users WHERE Id = {id}")` → **VULNERABLE** (string interpolation chạy trước). `FromSqlInterpolated($"SELECT * FROM Users WHERE Id = {id}")` → **SAFE** (auto-parameterize). Đây là distinction cực kỳ hay bị miss.
+> - **XSS**: React tự escape JSX output. Không dùng `dangerouslySetInnerHTML`. **Backend-side**: dùng `HtmlEncoder`, `JavaScriptEncoder`, `UrlEncoder` từ `System.Text.Encodings.Web`. CSP headers qua middleware.
+> - **CSRF**: `[ValidateAntiForgeryToken]` cho MVC server-rendered views. SPA + API dùng JWT trong Authorization header → CSRF không apply (CSRF chỉ exploit cookie-based auth). Nếu dùng cookie auth → SameSite=Strict + double-submit cookie pattern.
+>
+> **Senior-level: Attack vectors thường bị bỏ qua:**
+> - **Mass Assignment / Over-posting**: Dùng DTOs hoặc `[Bind]`, **KHÔNG** bind trực tiếp vào entities. Attacker thêm field `IsAdmin=true` vào request.
+> - **IDOR (Insecure Direct Object Reference)**: Luôn validate user có quyền access resource, không chỉ check authentication mà phải check authorization trên từng resource.
+> - **Rate Limiting**: .NET 7+ `app.UseRateLimiter()` built-in với fixed window, sliding window, token bucket, concurrency limiters.
+> - **Security Headers**: HSTS, X-Content-Type-Options, X-Frame-Options, Referrer-Policy qua `app.UseHsts()` hoặc NWebsec middleware.
 
 ### 19. Xử lý sensitive data (PII, credentials)?
 
@@ -200,6 +293,15 @@
 ### 23. Thiết kế notification real-time?
 
 > **SignalR** cho .NET ecosystem (WebSocket dưới hood, fallback long-polling). Client subscribe vào hub, server push notification. Scale: **Azure SignalR Service** hoặc Redis backplane để nhiều server instance share connections. Notification lưu DB để user xem lại. Unread count cache trong Redis. Mobile: push notification qua Firebase/APNs song song.
+>
+> **Senior-level architecture:**
+> - **Delivery guarantees**: User offline → persist notification, deliver on reconnection. Financial system: missed notification về margin call hoặc payment failure là critical. Cần at-least-once delivery + sequence numbers.
+> - **Fan-out**: 1 notification → 1 user đơn giản. Policy change → 10,000 users trong tenant = khác. Cần pub/sub với user subscriptions, không direct per-connection.
+> - **Connection resilience**: WebSocket disconnect khi deploy → cần auto-reconnect với exponential backoff, full state sync on reconnect, visual staleness indicator trên UI.
+> - **Priority + throttling**: Fraud alert → immediate. Weekly summary → batch. Priority queues tránh notification fatigue.
+> - **Intermediate notification service**: Event → Notification Service (template, channel routing web/mobile/email, user preference filtering, deduplication) → Delivery channels. **Không** đi thẳng event → push.
+> - **Backpressure**: Burst 100k events → queue + rate limiting giữa event generation và notification delivery, tránh overwhelm SignalR hubs + DB.
+> - **Unread count**: Redis là cache hay source of truth? Nếu cache → cần fallback khi evict. Nếu SoT → cần durability story.
 
 ### 24. Thiết kế CRM system đơn giản?
 
@@ -212,12 +314,25 @@
 
 ### 25. Scale từ 100 req/s lên 10,000 req/s?
 
-> 1. **Caching**: Redis cho hot data, response caching cho GET endpoints.
-> 2. **Database**: read replicas, connection pooling, optimize queries + index.
-> 3. **Horizontal scale**: multiple app instances behind load balancer (sticky session off, stateless app).
-> 4. **Async processing**: message queue (RabbitMQ/SQS) cho heavy work, worker service xử lý background.
-> 5. **CDN**: static assets + API response caching ở edge.
-> 6. **Database sharding** nếu single DB không đủ.
+> **⚠️ Quan trọng nhất: Phải profile tìm bottleneck TRƯỚC khi prescribe solutions.** Không phải lúc nào DB cũng là vấn đề — có thể CPU-bound hoặc external API dependency.
+>
+> **Phased approach (thứ tự quan trọng):**
+> 1. **Phase 1 (100→500)**: Redis caching cho top 5 hottest endpoints + query optimization (index, N+1 fix). Chi phí thấp, impact cao nhất.
+> 2. **Phase 2 (500→2,000)**: Database read replicas, CQRS route read queries sang replica. Connection pooling tuning (default max 100 `SqlConnection`).
+> 3. **Phase 3 (2,000→5,000)**: Horizontal scale — multiple stateless app instances behind LB. Async processing: message queue (RabbitMQ/SQS) cho heavy work.
+> 4. **Phase 4 (5,000→10,000)**: gRPC cho service-to-service (HTTP/2 + Protobuf, nhanh hơn REST đáng kể). Database sharding nếu single DB bottleneck.
+> 5. **CDN**: Static assets + public cacheable API responses (⚠️ financial CRM hầu hết response là user-specific → CDN utility hạn chế).
+>
+> **.NET-specific tuning:**
+> - **Output Caching** (.NET 7+): `app.UseOutputCache()` với tag-based invalidation — khác Response Caching (HTTP cache headers).
+> - **`System.Text.Json` source generators**: Zero-reflection serialization, giảm allocations.
+> - **Kestrel tuning**: `MaxConcurrentConnections`, HTTP/2 settings. Single .NET 8 Kestrel instance 4-core ≈ 5,000-15,000 simple JSON req/s.
+> - **`ObjectPool<T>`** cho expensive-to-create objects. `Span<T>`/`Memory<T>` cho zero-allocation processing.
+> - **Polly circuit breakers**: Prevent cascade failures khi downstream service chậm/dead.
+> - **Rate Limiting** (.NET 7): `RateLimiterMiddleware` bảo vệ trước external API gateway kicks in.
+> - **Health checks**: `app.MapHealthChecks()` với liveness vs readiness probes cho Kubernetes routing.
+>
+> **Caching strategy (phần khó nhất):** Cache-aside vs write-through? TTL strategy? Invalidation approach (event-driven, không time-based)? Cache hit ratio target? Data nào cacheable (reference data, user profiles) vs phải fresh (account balance, transaction status)?
 
 ---
 
@@ -1057,6 +1172,17 @@ const MyComponent = ({ title }: Props) => { ... };
    - SharedWorker tách computation khỏi main thread
    - Zustand với selectors → mỗi chart subscribe đúng slice data của mình
 
+5. **Backend architecture (thường bị bỏ qua):**
+   - 50 charts × 1s × 100 concurrent users = 5,000 queries/s chỉ cho dashboard. **Cần**: pre-aggregated materialized views, time-series DB (TimescaleDB/InfluxDB), server-side aggregation service compute 1 lần broadcast tất cả subscribers.
+   - **Delta computation**: Server-side diff against last-sent state per client? Sequence numbers? Event-driven chỉ changed data points?
+   - **Adaptive frequency**: Critical real-time metrics = 1s, operational = 5s, trend data = 30s. Giảm load đáng kể.
+
+6. **Production concerns:**
+   - **Connection resilience**: Deploy → WebSocket drop → auto-reconnect + exponential backoff + full state sync + visual staleness indicator.
+   - **Memory management**: 50 charts rolling time windows → circular buffers + time-window pruning, nếu không browser memory grows indefinitely.
+   - **`requestAnimationFrame` batching detail**: Collect tất cả WebSocket messages trong 1 frame (~16ms), batch-update Zustand store 1 lần, React reconcile 1 lần.
+   - **Correction**: `useDeferredValue` cho deprioritize render khi user interaction. Charts không visible → dùng **IntersectionObserver** pause updates hoàn toàn — hiệu quả hơn.
+
 ---
 
 ### Q31. User report rằng search box bị lag khi gõ. Cách debug và fix?
@@ -1893,7 +2019,13 @@ var order = dbSet.Where(o => o.Id == id && o.StoreId == storeId)
 
 **Câu 12: Thiết kế schema cho hệ thống F&B multi-tenant. Tại sao project chọn `StoreId` trên mỗi bảng thay vì database-per-tenant?**
 
-> 🧠 **Trả lời nhanh (Senior):** Shared DB + discriminator column (`StoreId`) giảm cost infra (1 DB vs N DB), migration chạy 1 lần, cross-tenant reporting dễ dàng. Trade-off là data isolation yếu hơn (quên filter StoreId = data leak), và 1 DB có thể thành bottleneck khi scale. Project giảm thiểu risk bằng Global Query Filter, nhưng nếu grow lên enterprise thì cần xem xét hybrid (shard by region).
+> 🧠 **Trả lời nhanh (Senior):** Shared DB + discriminator column (`StoreId`) giảm cost infra (1 DB vs N DB), migration chạy 1 lần, cross-tenant reporting dễ dàng (cho admin, **không phải** cross-tenant cho user). Trade-off là data isolation yếu hơn (quên filter StoreId = data leak), và 1 DB có thể thành bottleneck khi scale. Project giảm thiểu risk bằng Global Query Filter, nhưng nếu grow lên enterprise thì cần xem xét hybrid (shard by region).
+>
+> **⚠️ Global Query Filter là cần thiết nhưng KHÔNG đủ:** Raw SQL queries, Stored Procedures, Dapper calls bypass EF Core. Defense-in-depth: (1) **Row-Level Security (RLS)** ở DB level làm barrier thứ 2, (2) Middleware validate StoreId against authenticated user's claims, (3) Integration tests verify tenant isolation.
+>
+> **Noisy neighbor**: 1 tenant chạy report nặng → degrade toàn bộ. Solutions: Resource Governor ở DB, query timeout enforcement, rate limiting per tenant. Tenant vượt ngưỡng (X rows/Y req/s) → "graduate" sang dedicated schema/DB.
+>
+> **Tenant-aware indexing**: Mọi query plan đều có StoreId → composite indexes với StoreId leading column là **bắt buộc**.
 
 <details>
 <summary>💡 Gợi ý trả lời chi tiết</summary>
@@ -1950,6 +2082,13 @@ Project cache getter vào `ConcurrentDictionary` → compile 1 lần, dùng mãi
 **Câu 14: Trong hệ thống đặt hàng, làm thế nào để handle race condition khi 2 user cùng đặt hàng giảm tồn kho?**
 
 > 🧠 **Trả lời nhanh (Senior):** Dùng atomic UPDATE: `SET Quantity = Quantity - @qty WHERE Quantity >= @qty`, check `@@ROWCOUNT` — nếu 0 thì rollback (hết hàng). Pessimistic: `SELECT WITH (UPDLOCK, ROWLOCK)` trong transaction lock row trước khi update. Optimistic: thêm `WHERE LastSavedTime = @original` detect conflict rồi retry. Project dùng explicit transaction + EF tracking `LastSavedTime` cho optimistic concurrency.
+>
+> **Senior-level additions:**
+> - **EF Core Optimistic Concurrency**: Config `[Timestamp]` attribute hoặc `modelBuilder.Entity<Product>().Property(p => p.RowVersion).IsRowVersion()`. EF throw `DbUpdateConcurrencyException` → reload entity, merge logic, retry.
+> - **API-level idempotency**: Client gửi `Idempotency-Key` header. Server store key + response. Same key lần 2 → return stored response. Prevent double-ordering.
+> - **Outbox Pattern**: Order update inventory + publish event (payment service) → transactional outbox guarantee both or neither.
+> - **Queue-based serialization**: Flash sales → serialize inventory ops qua message queue. 1 product = 1 consumer, eliminate contention hoàn toàn. Trade latency cho correctness.
+> - **Distributed locking**: Multiple app instances → Redis `SETNX` với expiry hoặc Redlock algorithm. ⚠️ Không perfectly safe (clock skew, network partition).
 
 <details>
 <summary>💡 Gợi ý trả lời chi tiết</summary>
@@ -2073,6 +2212,15 @@ Tôi sẽ áp dụng **Clean Architecture** (hay Onion Architecture) kết hợp
 - **Message Queue**: RabbitMQ hoặc Azure Service Bus cho async processing (ví dụ: gửi email, generate reports).
 
 > Trong financial domain, tôi đặc biệt chú trọng **data consistency** (ACID transactions), **audit trail** (mọi thay đổi dữ liệu đều được log), và **idempotency** cho các API mutation.
+>
+> **Senior Architect additions:**
+> - **Bounded Contexts**: Financial CRM có distinct subdomains: Customer Management, Deal Pipeline, Compliance/Audit, Billing, Reporting. Map relationships (shared kernel? anti-corruption layer giữa Compliance và Deal?).
+> - **Consistency boundaries cụ thể**: "ACID" quá vague. Deal state transitions, ledger entries → strong consistency. Notification delivery, report generation → eventual consistency. Vẽ ranh giới rõ ràng.
+> - **Idempotency implementation**: Idempotency keys trong request headers + deduplication table với TTL. Financial ops double-charging là catastrophic.
+> - **Audit trail architecture**: Event sourcing vs CDC (Change Data Capture) vs trigger-based? Mỗi cách có trade-offs về queryability, storage cost, replay capability.
+> - **Security architecture**: Row-level security, encryption at rest/in transit, PII handling, regulatory compliance (PCI-DSS nếu payment data, SOX cho financial reporting).
+> - **MediatR ≠ Message Bus**: MediatR xử lý in-process pipeline behaviors; RabbitMQ xử lý inter-service communication. Không conflate.
+> - **UoW trên EF Core**: DbContext đã là Unit of Work — wrap thêm layer thường redundant trừ khi multi-context coordination.
 
 ---
 
@@ -2273,7 +2421,15 @@ private static readonly Func<AppDbContext, Guid, Task<Customer?>> GetCustomerByI
 
 5. **Async Processing**: Chuyển heavy operations sang message queue (RabbitMQ/Azure Service Bus) → background workers xử lý.
 
-6. **CDN**: Serve static frontend assets qua CDN (CloudFront, Azure CDN).
+6. **CDN**: Serve static frontend assets qua CDN (CloudFront, Azure CDN). ⚠️ Lưu ý: Financial CRM hầu hết response user-specific + sensitive → CDN utility hạn chế cho API, chủ yếu static assets.
+
+7. **gRPC** cho service-to-service: HTTP/2 multiplexing + Protocol Buffers — nhanh hơn REST đáng kể cho internal communication.
+
+8. **Circuit Breakers (Polly)**: Prevent cascade failure khi downstream chậm/dead.
+
+9. **.NET tuning**: `System.Text.Json` source generators, `ObjectPool<T>`, Kestrel settings (`MaxConcurrentConnections`), Output Caching (.NET 7+).
+
+> **Key insight**: Phải profile bottleneck TRƯỚC. Thứ tự apply (caching → read replica → horizontal scale → sharding) quan trọng hơn danh sách solutions.
 
 ```yaml
 # Docker Compose cho local development
@@ -2410,9 +2566,24 @@ services:
    var customerTask = _customerService.GetAsync(id, ct);
    var transactionsTask = _transactionService.GetByCustomerAsync(id, ct);
    var notesTask = _noteService.GetByCustomerAsync(id, ct);
-   
+
    await Task.WhenAll(customerTask, transactionsTask, notesTask);
    ```
+
+**Senior-level additions:**
+
+6. **Deadlock nuance**: ASP.NET Core **KHÔNG** có SynchronizationContext → `.Result`/`.Wait()` sẽ **KHÔNG deadlock** trong ASP.NET Core. Nhưng sẽ gây **thread pool starvation** dưới load — thread bị block chờ thay vì trả về pool. Trong ASP.NET classic (non-Core) và WPF/WinForms thì **CÓ deadlock** thật.
+
+7. **Task.WhenAll error handling**: Chỉ throw exception đầu tiên. Dùng `.Exception` trên từng task để lấy tất cả errors:
+   ```csharp
+   var tasks = items.Select(ProcessAsync).ToArray();
+   try { await Task.WhenAll(tasks); }
+   catch { /* inspect each: tasks.Where(t => t.IsFaulted) */ }
+   ```
+
+8. **SemaphoreSlim throttling**: Gọi external API parallel → dùng `SemaphoreSlim(10)` limit concurrency tránh overwhelm downstream.
+
+9. **Fire-and-forget properly**: Nếu bắt buộc, dùng `Channel<T>` processed bởi `BackgroundService`, **KHÔNG** `Task.Run(() => ...)` vì exception bị nuốt và không có retry/monitoring.
 
 ---
 
@@ -2511,18 +2682,36 @@ public class ReportRepository : IReportRepository
     public async Task<IEnumerable<MonthlyRevenue>> GetMonthlyRevenueAsync(int year)
     {
         const string sql = @"
-            SELECT MONTH(CreatedAt) as Month, 
+            SELECT MONTH(CreatedAt) as Month,
                    SUM(Amount) as TotalRevenue,
                    COUNT(*) as TransactionCount
             FROM Transactions
             WHERE YEAR(CreatedAt) = @Year AND Status = 1
             GROUP BY MONTH(CreatedAt)
             ORDER BY Month";
-            
+
         return await _connection.QueryAsync<MonthlyRevenue>(sql, new { Year = year });
     }
 }
 ```
+
+**Senior-level additions:**
+
+- **EF Core improvements theo version** (giảm cases cần Dapper):
+  - EF Core 7: `ExecuteUpdate`/`ExecuteDelete` (bulk ops không load entity)
+  - EF Core 8: Complex type support, `SqlQuery<T>` cho raw SQL unmapped types
+  - EF Core 9: Improved LINQ translation, better GroupBy support
+
+- **Shared connection/transaction**: EF + Dapper share cùng `DbConnection` và transaction:
+  ```csharp
+  var conn = context.Database.GetDbConnection();
+  var tran = context.Database.CurrentTransaction.GetDbTransaction();
+  var result = await conn.QueryAsync<T>(sql, param, tran);
+  ```
+
+- **`EF.CompileAsyncQuery()`**: Hot-path queries → eliminate LINQ expression tree compilation overhead. Narrows performance gap với Dapper đáng kể.
+
+- **Dapper pitfalls**: Không có change tracking (manage updates manually), không migrations, SQL strings không refactoring-safe, **không có Global Query Filters** (soft delete, multi-tenant → phải nhớ WHERE clause mọi nơi). Trade-off rõ ràng, không chỉ recommend Dapper vì "nhanh hơn".
 
 ---
 
@@ -2705,10 +2894,14 @@ stages:
 
 **Key points cho financial app:**
 - **Manual gate trước production** — không bao giờ auto-deploy production cho financial services.
-- **Blue-green deployment** cho zero-downtime.
-- **Database migration** chạy riêng trước khi deploy code (backward compatible migrations).
+- **Blue-green deployment** cho zero-downtime. **Xem xét Canary** (route 1-5% traffic → monitor → gradually increase) — safer hơn blue-green (all-or-nothing).
+- **Database migration strategy**: **Expand/Contract pattern** — add new column → deploy code writes to both → migrate data → deploy code reads from new → drop old. Zero-downtime schema changes. ⚠️ Migration chạy 2 phút staging có thể lock table 30 phút production.
 - **Feature flags** (LaunchDarkly / custom) cho gradual rollout.
-- **Rollback plan** luôn sẵn sàng.
+- **Rollback plan**: Blue-green cho deployment rollback dễ, nhưng **data rollback** mới khó — nếu bug corrupt financial data 15 phút trước khi detect? Point-in-time restore? Event sourcing replay? Compensation transactions?
+- **Compliance gates**: Change approval records, segregation of duties (code writer ≠ deploy approver), audit logs mọi deployment.
+- **Environment parity**: Test với **sanitized production data** — synthetic data không catch edge cases (currency rounding, timezone, legacy account structures).
+- **⚠️ DAST timing**: DAST cần running app, tốn thời gian → chạy nightly/weekly, không mỗi commit. SAST + SCA (dependency vulnerabilities) chạy mỗi commit.
+- **80% coverage arbitrary**: Coverage % là weak signal. Financial calculations (interest, fee, currency conversion) cần **100% branch coverage** + property-based testing.
 
 ---
 
@@ -2750,6 +2943,18 @@ services.AddHealthChecks()
     .AddRedis(redisConnection)
     .AddCheck<ExternalPaymentGatewayHealthCheck>("payment-gateway");
 ```
+
+**Senior-level additions:**
+
+- **Observability workflow cụ thể**: "Check error rate dashboard → identify spike timestamp → pivot to traces cho time window đó → find failing span → pull structured logs cho correlation ID." Workflow này phân biệt người đã làm vs người đọc sách.
+
+- **Severity classification**: SEV1 (data loss, financial miscalculation, complete outage) → different escalation path vs SEV3 (degraded performance non-critical feature). Response SLA khác nhau.
+
+- **Communication during incidents**: Status page updates, stakeholder communication cadence, incident commander designation — financial system customers + regulators expect timely communication.
+
+- **Financial-specific mitigation**: Circuit breaker activation, feature flag kill switches, traffic shedding (reject lower-priority requests), **read-only mode** (prevent writes nếu data integrity at risk).
+
+- **Postmortem structure**: Timeline reconstruction, contributing factors (không chỉ 1 root cause), action items với owners + deadlines, review monitoring gaps.
 
 ---
 
