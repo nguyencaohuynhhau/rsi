@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "skills": {
+    "deep-reader": {
+      "source": "tronghieu/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/deep-reader/SKILL.md",
+      "computedHash": "189a52236ae426e2c2d910c01b184dcf511be693b602f78cf8cbb8ac3742a0b5"
+    },
+    "diataxis-writer": {
+      "source": "tronghieu/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/diataxis-writer/SKILL.md",
+      "computedHash": "131b105e71db80c5c0f0eb316500c7e7061fe997a0e12288ecfca48c7986d73e"
+    }
+  }
+}
