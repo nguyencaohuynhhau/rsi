@@ -11,6 +11,7 @@
 ## Mục Lục
 
 1. [Camera AI làm việc thế nào](#1-camera-ai-làm-việc-thế-nào)
+   - [1.4. ⭐ Bước so sánh: làm sao biết ảnh camera và ảnh gốc là cùng 1 người](#14--bước-so-sánh-làm-sao-biết-ảnh-camera-và-ảnh-gốc-là-cùng-1-người)
 2. ["Train model" thực chất là gì](#2-train-model-thực-chất-là-gì)
 3. [Setup model AI với card RTX trên Linux](#3-setup-model-ai-với-card-rtx-trên-linux)
 4. [Cách lấy hình vào để train](#4-cách-lấy-hình-vào-để-train)
@@ -84,6 +85,117 @@ Dahua** rồi xử lý theo lô (batch).
 | **Retry lỗi tạm thời** | 10 phút | Lỗi mạng/timeout → requeue job thay vì `mark_failed` |
 | **Stuck job** | `stuck_job_timeout_minutes: 15` | Job kẹt `processing` → reset về `pending` |
 | **Cô lập GPU** | mỗi job 1 subprocess | 1 job crash không kéo sập cả worker |
+
+### 1.4. ⭐ Bước so sánh: làm sao biết ảnh camera và ảnh gốc là cùng 1 người
+
+> **Điểm cần hiểu đúng trước tiên:** hệ thống **KHÔNG BAO GIỜ so sánh 2 tấm ảnh với nhau**.
+> Ảnh gốc học sinh **không hề có mặt trên máy local** lúc nhận diện. Cái được so sánh là
+> **2 vector 512 chiều**.
+
+#### a) Sơ đồ tổng quát
+
+```
+NHÁNH A — Ảnh gốc học sinh (làm 1 lần, lúc train, 02:00 sáng)
+  ảnh chân dung trên R2
+      → auto-rotate + lọc chất lượng
+      → ArcFace  ──► vector A (512 số)
+      → chuẩn hoá L2, cất vào model.pkl
+                                        ┌──────────────┐
+NHÁNH B — Khuôn mặt từ video camera     │  SO SÁNH Ở   │
+  frame video (1 fps)                   │     ĐÂY      │
+      → SCRFD detect                    └──────────────┘
+      → ArcFace  ──► vector B (512 số)         ▲
+      → chuẩn hoá L2                           │
+                                               │
+              cosine_similarity(A, B) = A · B  ┘
+                      ≥ 0.52  →  cùng 1 người
+```
+
+**Mấu chốt:** cả 2 nhánh đều dùng **chung một mạng ArcFace `buffalo_l`**. Cùng một hàm toán
+học, nên 2 tấm ảnh của cùng một người — dù chụp cách nhau 6 tháng, một tấm studio một tấm
+camera an ninh — sẽ cho ra 2 vector **nằm gần nhau** trong không gian 512 chiều.
+
+#### b) Chính xác dòng code nào làm việc so sánh
+
+**Bước 1 — Nạp vector phía ảnh gốc từ `model.pkl`**
+`workers/video_processor.py:117-128`
+
+```python
+for p in model_data['persons']:
+    emb = np.array(p['mean_embedding'], dtype=np.float32)
+    emb = emb / (np.linalg.norm(emb) + 1e-8)      # chuẩn hoá L2
+    embeddings.append(emb)
+    person_ids.append(p['person_id'])
+
+matrix = np.ascontiguousarray(embeddings, dtype=np.float32)   # ma trận N×512
+```
+
+`N` = số học sinh + giáo viên của trường. Đây là **toàn bộ "ảnh gốc"** đã được nén thành số.
+
+**Bước 2 — Rút vector phía camera từ frame video**
+`workers/video_processor.py:326-341`
+
+```python
+raw_faces = face_app.get(img)          # SCRFD detect + ArcFace embed
+...
+embeddings.append(face.embedding)      # vector của mặt vừa thấy trong video
+```
+
+**Bước 3 — ⭐ DÒNG SO SÁNH THẬT SỰ**
+`workers/video_processor.py:176-181`
+
+```python
+if _model_cache['use_faiss']:
+    top_scores, top_indices = _model_cache['faiss_index'].search(batch, k=actual_k)
+else:
+    sims = batch @ _model_cache['embeddings_matrix'].T      # ← ĐÂY
+    top_indices = np.argsort(-sims, axis=1)[:, :actual_k]
+```
+
+`batch @ matrix.T` là một phép **nhân ma trận**: mỗi khuôn mặt trong frame được so với
+**tất cả** học sinh cùng lúc. Vì cả 2 vế đều đã chuẩn hoá L2, **tích vô hướng chính là
+cosine similarity**.
+
+FAISS `IndexFlatIP` (**IP = Inner Product**) làm đúng phép toán đó, chỉ nhanh hơn.
+
+**Bước 4 — Dòng ra quyết định**
+`workers/video_processor.py:191`
+
+```python
+passed = score >= threshold        # threshold = 0.52 từ config.yaml
+```
+
+| Điểm cosine | Ý nghĩa |
+|---|---|
+| `1.00` | 2 vector trùng khít — cùng đúng 1 tấm ảnh |
+| `≥ 0.52` | **Kết luận: cùng 1 người** |
+| `~0.3–0.5` | Vùng xám — có nét giống nhưng không đủ tin |
+| `~0.0` | 2 người hoàn toàn khác nhau |
+
+#### c) Sau khi so sánh xong còn 3 lớp lọc nữa
+
+Điểm cosine vượt ngưỡng **chưa đủ để ghi nhận**:
+
+| Lớp | Vị trí | Việc làm |
+|---|---|---|
+| **Top-3 + Greedy Assignment** | `video_processor.py:350-362` | Lấy 3 ứng viên điểm cao nhất. Nếu 2 khuôn mặt trong cùng frame cùng khớp 1 học sinh → chỉ người điểm cao được nhận, người kia rơi xuống ứng viên #2. Ngăn 1 học sinh bị gán cho 2 chỗ trong cùng khung hình |
+| **Dedup lớp 1** | `video_processor.py:852-859` | Trong 1 video, mỗi người chỉ giữ **frame có điểm cao nhất** |
+| **Dedup lớp 2** | `video_processor.py:882-891` | Mỗi người chỉ 1 record/buổi/ngày (MORNING hoặc AFTERNOON). Chỉ ảnh sống sót tới đây mới được upload R2 |
+
+#### d) Hai hệ quả thực tế đáng lưu ý
+
+**1. Không thể "xem lại" ảnh gốc để đối chiếu thủ công.**
+`model.pkl` chỉ chứa số, không chứa ảnh. Muốn kiểm tra bằng mắt tại sao hệ thống nhận nhầm,
+phải quay về R2 lấy ảnh gốc — có script sẵn: `download_original_faces.py`.
+
+**2. Đây chính là chỗ giới hạn "1 embedding/người" gây đau.**
+Vì mỗi học sinh chỉ có **một** vector A duy nhất (từ tấm ảnh đẹp nhất), nên nếu tấm ảnh gốc
+đó chụp chính diện đủ sáng, mà camera lại bắt được mặt nghiêng ngược sáng — điểm cosine sẽ
+tụt xuống dưới `0.52` và **bỏ sót**. Có 5–10 vector/người phủ nhiều góc và điều kiện sáng thì
+tỉ lệ bắt được cao hơn hẳn.
+
+→ Đây là lý do **Ưu tiên 1** trong [lộ trình cải tiến](#8-lộ-trình-cải-tiến-đề-xuất) là
+multi-template enrollment.
 
 ---
 
