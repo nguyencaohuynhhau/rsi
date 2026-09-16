@@ -218,10 +218,11 @@ Khi Flash sale diễn ra, ta có 2 cách trừ kho nguyên tử trên Redis:
     ```
   - *Lợi ích:* Kiểm tra chính xác số lượng tồn so với số lượng mua, đảm bảo kho không bao giờ rớt xuống số âm. Trả về chính xác 1 (thành công) hoặc 0 (thất bại).
 
-#### Tầng 3: Xếp hàng với RabbitMQ & Cập nhật UI với SignalR
-- **API (Producer):** Những người lọt qua được cửa ải Redis ở Tầng 2 (tức là có hàng) sẽ được Backend nhét message `OrderRequest` vào RabbitMQ. API lập tức trả về HTTP 202 (Accepted) kèm lời nhắn "Hệ thống đang xử lý". Giao diện người dùng sẽ hiện Spinner quay.
-- **Worker (Consumer):** Lấy từng message ra từ RabbitMQ theo thứ tự (`PrefetchCount = 1`) và thong thả thực thi lệnh Update vào Database (Sử dụng Optimistic Update ở Tầng 1 để chốt lần cuối).
-- **Phản hồi UI (SignalR):** Sau khi ghi DB thành công, Worker dùng SignalR bắn message trực tiếp tới `ConnectionId` của User đó: "Chúc mừng, thanh toán thành công!". Trình duyệt nhận được message sẽ tắt Spinner và chuyển hướng đến trang thanh toán. Đây là cơ chế Asynchronous Request-Reply hoàn hảo cho các hệ thống tải cao.
+#### Tầng 3: Xếp hàng với Message Queue (RabbitMQ hoặc Redis Streams) & Cập nhật UI
+- **API (Producer):** Những người lọt qua được cửa ải Redis ở Tầng 2 (chỉ có 5 người) sẽ được Backend đưa vào một hàng đợi. 
+  *(Góc nhìn Architect: Bạn hoàn toàn chính xác. Vì Redis đã lọc 1 triệu request xuống chỉ còn 5 request, áp lực tải trọng đã bằng 0. Ở bước này, ta không dùng RabbitMQ để "chịu tải" nữa (một hàng đợi đơn giản trên RAM như `Channel<T>` cũng dư sức làm được). Ta dùng RabbitMQ ở đây là để lấy **Tính Bền Vững (Durability)** - đảm bảo lưu 5 đơn hàng này xuống ổ cứng, đề phòng đúng lúc đó Web Server bị sập (Crash/Restart) làm mất đơn của khách. Tối ưu nhất: Dùng luôn **Redis Streams** như phần Nâng cao bên dưới để bỏ hẳn RabbitMQ).*
+- **Worker (Consumer):** Lấy từng message ra từ hàng đợi theo thứ tự (`PrefetchCount = 1`) và thong thả thực thi lệnh Update vào Database (Sử dụng Optimistic Update ở Tầng 1 để chốt lần cuối).
+- **Phản hồi UI (SignalR):** Sau khi ghi DB thành công, Worker dùng SignalR bắn message trực tiếp tới `ConnectionId` của User đó: "Chúc mừng, thanh toán thành công!". Trình duyệt nhận được message sẽ tắt Spinner và chuyển hướng đến trang thanh toán. Đây là cơ chế Asynchronous Request-Reply hoàn hảo.
 
 #### Chi tiết Luồng Dữ Liệu End-to-End (Từ Frontend đến Backend tới DB và trả ngược lại)
 Để làm rõ tại sao kiến trúc lại theo hình phễu (**Redis chặn trước $\rightarrow$ RabbitMQ $\rightarrow$ Database**) và tại sao phải quản lý tồn kho ở hai cấp độ (Cache và Source of Truth), hãy xem xét luồng dữ liệu khi 10.000 user cùng click mua một sản phẩm chỉ còn tồn kho bằng 5:
