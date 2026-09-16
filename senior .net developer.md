@@ -87,15 +87,15 @@ Custom middleware được tạo bằng cách implement `IMiddleware` hoặc vi�
 
 ---
 
-## 6. Bạn sử dụng pattern nào để xử lý distributed transaction và đảm bảo tính nhất quán dữ liệu giữa các microservice?
+## 6. Bạn xử lý luồng giao dịch phức tạp (complex transactions) và đảm bảo tính nhất quán dữ liệu giữa các module trong hệ thống Monolith như thế nào?
 
-Distributed two-phase commit (2PC) thường được tránh trong kiến trúc microservice do coupling chặt và đặc tính khả dụng kém. Thay vào đó:
+Giao dịch phân tán rườm rà (distributed transactions) hoặc khóa cơ sở dữ liệu trên diện rộng thường được tránh trong kiến trúc modular monolith do giảm hiệu năng và gây bế tắc (deadlocks). Thay vào đó:
 
-**Saga Pattern**: Điều phối một chuỗi các transaction cục bộ xuyên suốt các service. Mỗi bước có một hành động bù trừ (compensating action) để rollback. Hai cách tiếp cận:
-- **Choreography (Biên đạo)**: Các service phát hành domain event; các service khác phản ứng. Đơn giản nhưng khó theo dõi luồng tổng thể.
+**Saga Pattern (Sử dụng Event-Driven)**: Điều phối một chuỗi các giao dịch cục bộ xuyên suốt các module. Mỗi bước có một hành động bù trừ (compensating action) để rollback. Hai cách tiếp cận:
+- **Choreography (Biên đạo)**: Các module phát hành domain event; các module khác phản ứng. Đơn giản nhưng khó theo dõi luồng tổng thể.
 - **Orchestration (Điều phối)**: Một orchestrator trung tâm điều khiển các bước saga. Dễ suy luận và debug hơn.
 
-**Outbox Pattern**: Ghi domain event vào bảng `Outbox` trong cùng một database transaction với dữ liệu nghiệp vụ. Một tiến trình nền (hoặc công cụ CDC như Debezium) phát hành các event lên message broker. Điều này đảm bảo giao hàng ít nhất một lần (at-least-once delivery) mà không cần distributed transaction.
+**Outbox Pattern**: Ghi domain event vào bảng `Outbox` trong cùng một database transaction với dữ liệu nghiệp vụ. Một tiến trình nền (Background Worker) phát hành các event để xử lý tiếp. Điều này đảm bảo giao hàng ít nhất một lần (at-least-once delivery) mà không cần giao dịch kéo dài trên diện rộng.
 
 **Idempotent consumer (Consumer bất biến)**: Vì at-least-once delivery có nghĩa là có thể có bản sao, mọi consumer phải xử lý việc tái xử lý một cách an toàn — thường thông qua bảng `IdempotencyKey` hoặc `ProcessedMessages`.
 
@@ -208,7 +208,7 @@ logger.LogInformation($"Order {orderId} placed by {customerId}");
 ## 11. Các nguyên tắc chính của Domain-Driven Design là gì và bạn áp dụng chúng trong giải pháp .NET như thế nào?
 
 **Các pattern chiến lược (Strategic patterns):**
-- **Bounded Context (Ngữ cảnh giới hạn)**: Mỗi microservice hoặc module sở hữu một subdomain cụ thể với ngôn ngữ chung (ubiquitous language) và model riêng. Một "Order" trong ngữ cảnh Sales khác với "Order" trong Shipping.
+- **Bounded Context (Ngữ cảnh giới hạn)**: Mỗi module sở hữu một subdomain cụ thể với ngôn ngữ chung (ubiquitous language) và model riêng. Một "Order" trong ngữ cảnh Sales khác với "Order" trong Shipping.
 - **Context Mapping**: Xác định mối quan hệ giữa các bounded context — Anti-Corruption Layer, Shared Kernel, Conformist, v.v.
 
 **Các pattern chiến thuật (Tactical patterns):**

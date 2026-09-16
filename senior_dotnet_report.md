@@ -25,7 +25,7 @@ Báo cáo này tổng hợp, phân tích và trả lời chuyên sâu các câu 
 
 ### Q: C# Records và Pattern Matching mang lại lợi ích gì so với Class thông thường?
 **Trả lời:**
-- **Records** cung cấp Value Equality (so sánh theo giá trị thay vì tham chiếu) và Immutability (bất biến) thông qua `init-only properties` và biểu thức `with`. Rất phù hợp để làm DTO (Data Transfer Objects) hoặc Event Messages trong Microservices.
+- **Records** cung cấp Value Equality (so sánh theo giá trị thay vì tham chiếu) và Immutability (bất biến) thông qua `init-only properties` và biểu thức `with`. Rất phù hợp để làm DTO (Data Transfer Objects) truyền tải dữ liệu giữa các module hoặc lưu trữ trong CSDL.
 - **Pattern Matching** kết hợp với Records giúp viết code ngắn gọn, rành mạch hơn thay vì dùng hàng loạt lệnh `if-else` lồng nhau, đặc biệt hữu dụng khi build các state machine hoặc logic business phức tạp.
 
 ---
@@ -65,13 +65,13 @@ Báo cáo này tổng hợp, phân tích và trả lời chuyên sâu các câu 
 
 ---
 
-## 4. Kiến Trúc Hệ Thống (System Architecture) & Microservices
+## 4. Kiến Trúc Hệ Thống & Phân Tách Module Trong Monolith
 
-### Q: Xử lý giao dịch phân tán (Distributed Transactions) trong Microservices thế nào?
+### Q: Xử lý giao dịch (Transactions) lặp vòng rườm rà giữa nhiều Module (Order, Inventory, Payment) trong cùng Monolith thế nào?
 **Trả lời:**
-- Tránh dùng 2PC (Two-Phase Commit) vì gây lock database và dễ điểm chết (Single Point of Failure).
-- Áp dụng **Saga Pattern** với các bù trừ (Compensating actions). Dùng Orchestration (có một orchestrator trung tâm quản lý luồng) để dễ theo dõi tiến trình và debug.
-- Sử dụng **Outbox Pattern**: Khi ghi vào DB của service A, đồng thời ghi event vào một bảng `Outbox` chung một giao dịch (transaction). Một background worker sẽ lấy event từ Outbox để publish lên Kafka/RabbitMQ. Điều này đảm bảo tính nhất quán (At-least-once delivery).
+- Không nên gọi chồng chéo các service nội bộ và bọc tất cả bằng một `TransactionScope` khổng lồ vì sẽ gây khóa (Lock) cơ sở dữ liệu trên diện rộng, giảm hiệu năng thê thảm.
+- **Giải pháp (Modular Monolith):** Áp dụng **Domain Events** để rã các kết dính này ra. Module Order lưu dữ liệu thành công sẽ phát ra một sự kiện `OrderPlacedEvent`. Các Module Inventory và Payment sẽ lắng nghe sự kiện này và tự thực thi các tiến trình của riêng mình một cách bất đồng bộ trong các Background Job ngắn hạn.
+- Sử dụng **Outbox Pattern**: Để chắc chắn không mất Message, khi ghi vào DB của Module A, đồng thời ghi sự kiện vào một bảng `Outbox` chung một giao dịch. Một Background Worker sẽ chạy ngầm để lấy sự kiện từ Outbox và kích hoạt các hàm xử lý tiếp theo.
 
 ### Q: Tại sao và khi nào dùng CQRS?
 **Trả lời:**
@@ -105,7 +105,7 @@ Báo cáo này tổng hợp, phân tích và trả lời chuyên sâu các câu 
 ### Q: Xây dựng hệ thống Cloud-Native & Observability với .NET Aspire như thế nào?
 **Trả lời (Góc nhìn Architect):**
 - Trong các hệ thống phân tán phức tạp, việc setup môi trường local giống với production, cũng như cấu hình tracing/metrics là một ác mộng. **.NET Aspire** (.NET 8/9) ra đời để giải quyết bài toán này.
-- Bằng cách sử dụng `AppHost` và `ServiceDefaults`, ta có thể inject các chuẩn về OpenTelemetry (Logs, Metrics, Tracing), HealthChecks, và Resilience (Polly) một cách nhất quán cho tất cả các microservices.
+- Bằng cách sử dụng `AppHost` và `ServiceDefaults`, ta có thể inject các chuẩn về OpenTelemetry (Logs, Metrics, Tracing), HealthChecks, và Resilience (Polly) một cách nhất quán ngay cả khi phân tách Monolith thành Web Role và Background Worker Role.
 - .NET Aspire hỗ trợ tự động discover và kết nối các resource (Redis, Postgres, RabbitMQ) mà không cần hardcode connection strings. Triển khai (Deploy) kiến trúc lên cloud dễ dàng thông qua `azd` (Azure Developer CLI) hoặc dùng `Aspirate` để sinh ra Kubernetes manifests.
 
 ### Q: Tích hợp AI & Agentic Workflows với Semantic Kernel?
@@ -174,7 +174,7 @@ Báo cáo này tổng hợp, phân tích và trả lời chuyên sâu các câu 
 ### Q: Khi nào nên sử dụng Domain Services và Domain Events?
 **Trả lời:**
 - **Domain Services:** Chứa các business logic rải rác trên nhiều Aggregates hoặc quá phức tạp để nhét vào một Entity (Ví dụ: `CalculateDiscountService` cần tương tác với `Order`, `CustomerRank` và `PromotionCampaign`).
-- **Domain Events:** Được kích hoạt (fire) khi có một thay đổi state quan trọng xảy ra trong Domain (ví dụ: `OrderCreatedEvent`). Dùng để decouple logic (side-effects) ra khỏi Entity chính, thường được các Event Handler bắt lại để thực thi các tác vụ như gửi Email, đẩy qua Outbox table cho Microservices khác xử lý mà không làm phình to hàm `CreateOrder`.
+- **Domain Events:** Được kích hoạt (fire) khi có một thay đổi state quan trọng xảy ra trong Domain (ví dụ: `OrderCreatedEvent`). Dùng để decouple logic (side-effects) ra khỏi Entity chính, thường được các Event Handler bắt lại để thực thi các tác vụ như gửi Email, đẩy qua Outbox table cho Background Worker xử lý mà không làm phình to hàm `CreateOrder`.
 
 ---
 
@@ -333,13 +333,13 @@ Nó là một cấu trúc dữ liệu dạng **Append-only Log** (tương tự k
 | **Độ trễ mạng & Thứ tự** | **Zero Network Latency** nếu gọi `XADD` ngay trong Lua Script. Đảm bảo **Strict FIFO** (thứ tự tuyệt đối 100%). | Bị ảnh hưởng bởi Network Latency khi API bắn message qua. Có thể làm đảo lộn thứ tự (Race Condition). |
 | **Định tuyến (Routing)** | Đơn giản, dạng ống thẳng đuột (Log). | Rất mạnh mẽ với hệ thống Exchange (Direct, Topic, Fanout). Dễ dàng định tuyến: *1 message ném vào 3 queue khác nhau*. |
 | **Xử lý lỗi (DLQ & Retry)**| Dev phải tự code tay hoàn toàn logic xử lý retry (`XPENDING`, `XCLAIM`). | Hỗ trợ Native: Tự động đếm số lần fail và đẩy sang Dead Letter Queue (DLQ) cực kỳ tiện lợi. |
-| **Tình huống khuyên dùng**| Flash Sale, Event Sourcing, nơi cần **tốc độ siêu tốc**, gom chung Infrastructure (dùng ké Redis) và cần **Strict FIFO**. | Hệ thống Enterprise Microservices, chia tách nghiệp vụ đa luồng, cần định tuyến phức tạp và lưu trữ an toàn cao nhất. |
+| **Tình huống khuyên dùng**| Flash Sale, Event Sourcing, nơi cần **tốc độ siêu tốc**, gom chung Infrastructure (dùng ké Redis) và cần **Strict FIFO**. | Kiến trúc Monolith quy mô lớn, tách biệt tải (Web & Worker), chia tách nghiệp vụ đa luồng, cần định tuyến Background Job phức tạp và lưu trữ an toàn cao nhất. |
 
 ---
 
-## Phụ Lục 2: Kiến trúc Event-Driven cho hệ thống F&B bằng RabbitMQ
+## Phụ Lục 2: Kiến trúc Event-Driven trong Monolith cho hệ thống F&B bằng RabbitMQ
 
-Trong các bài toán hệ thống F&B (Food & Beverage - chuỗi nhà hàng, trà sữa, app giao đồ ăn), việc làm mất một đơn hàng đồng nghĩa với thất thoát doanh thu, khách hàng giận dữ và vận hành tại quán rơi vào hỗn loạn. Khi hệ thống tiến lên kiến trúc Microservices, **RabbitMQ là sự lựa chọn BẮT BUỘC** (thay vì Redis Streams). Dưới đây là 4 kịch bản thực chiến minh chứng cho điều này:
+Trong các bài toán hệ thống F&B (Food & Beverage - chuỗi nhà hàng, trà sữa, app giao đồ ăn), việc làm mất một đơn hàng đồng nghĩa với thất thoát doanh thu, khách hàng giận dữ và vận hành tại quán rơi vào hỗn loạn. Dù duy trì thiết kế Monolith, **RabbitMQ vẫn là sự lựa chọn vô cùng thiết yếu** để cô lập tác vụ và đẩy tải chạy ngầm. Dưới đây là 4 kịch bản thực chiến minh chứng cho điều này:
 
 ### 1. Định tuyến phức tạp (Complex Routing - Publish/Subscribe)
 Khi một khách hàng thanh toán thành công 1 ly Trà sữa, hệ thống không chỉ làm 1 việc mà phải thực thi 4 nghiệp vụ song song:
@@ -348,7 +348,7 @@ Khi một khách hàng thanh toán thành công 1 ly Trà sữa, hệ thống kh
 - **Loyalty System:** Gọi dịch vụ cộng điểm thành viên.
 - **Notification:** Bắn thông báo Zalo/App cho khách: "Đơn đang được chuẩn bị".
 
-👉 **Sức mạnh RabbitMQ:** Sử dụng **Exchange (Fanout hoặc Topic)**. Backend API chỉ việc ném đúng 1 message "OrderPaid" vào Exchange. RabbitMQ sẽ tự động nhân bản và "chia bài" sang 4 Queue khác nhau cho 4 service độc lập. Nếu dùng Redis Streams, dev phải tự code logic chia luồng này rất cồng kềnh và dễ sinh lỗi.
+👉 **Sức mạnh RabbitMQ:** Sử dụng **Exchange (Fanout hoặc Topic)**. Web API chỉ việc ném đúng 1 message "OrderPaid" vào Exchange. RabbitMQ sẽ tự động nhân bản và "chia bài" sang 4 Queue khác nhau cho 4 Background Worker độc lập xử lý. Nếu dùng Redis Streams, dev phải tự code logic chia luồng này rất cồng kềnh và dễ sinh lỗi.
 
 ### 2. Sự cố rớt mạng cục bộ tại quán (Durability & Khả năng dồn ứ)
 Mạng Internet tại các cửa hàng F&B thường xuyên chập chờn. Giả sử trưa Chủ Nhật khách đông nghẹt, mạng ở quán rớt 30 phút, màn hình Bếp (KDS) mất kết nối với Server trung tâm.
@@ -574,7 +574,7 @@ Bên cạnh Concurrency và Race Condition, các hệ thống khi vận hành th
 - **Hậu quả:** Khi một nhân viên Kế toán bấm nút xuất báo cáo cuối tháng, tiến trình này "ăn" trọn 100% CPU và chiếm dụng 5GB RAM của Server. Hàng ngàn khách hàng bên ngoài đang lướt Web để mua hàng bỗng nhiên bị đứng hình (Timeout) vì Web Server không còn tài nguyên I/O và CPU để phản hồi request của họ.
 
 **Giải pháp của Senior (Resource Isolation trong Monolith):**
-- Ngay cả khi chưa "đập đi xây lại" thành Microservices, Senior vẫn áp dụng nguyên lý cô lập tài nguyên:
+- Thay vì phải "đập đi xây lại" chia nhỏ hệ thống một cách tốn kém, Senior vẫn duy trì Monolith nhưng áp dụng nguyên lý cô lập tài nguyên:
   - Vẫn giữ nguyên 1 Repository (Monorepo), dùng chung 1 Codebase.
   - Nhưng lúc **Deploy**, tách làm 2 con Server riêng biệt.
   - **Server 1 (Web API Role):** Chỉ hứng HTTP Request. Nếu gặp lệnh xuất báo cáo, nó ghi vào DB hoặc ném Message vào Hangfire/Queue rồi trả về màn hình Kế toán: `"Báo cáo đang được tạo..."`.

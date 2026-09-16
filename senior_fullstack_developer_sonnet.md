@@ -543,7 +543,7 @@ Phát hiện: bật `LogTo` của EF Core hoặc dùng MiniProfiler để đếm
 - Version control rõ ràng (SP trong DB rất khó diff/review).
 - Horizontal scaling — SP gắn với database instance.
 
-**Quan điểm thực tế**: với modern microservices + cloud database, ưu tiên application-side. SP dùng cho batch job và data migration, không nên dùng cho business logic.
+**Quan điểm thực tế**: với modern modular monoliths + cloud database, ưu tiên application-side. SP dùng cho batch job và data migration, không nên dùng cho business logic.
 
 ---
 
@@ -877,12 +877,12 @@ catch (SqlException ex) when (ex.Number == 1205) // Deadlock
 
 ---
 
-**Q4. Distributed tracing — tại sao cần và implement trong microservices như thế nào?**
+**Q4. Structured Logging và Application Monitoring — tại sao cần và implement trong hệ thống Monolith lớn như thế nào?**
 
 **A:**  
-Monolith: stack trace đủ để debug. Microservices: request đi qua 5–10 services → không biết chậm ở đâu.
+Monolith lớn: Nếu không có cấu trúc, log text thuần tuý rất khó truy vấn khi hệ thống phức tạp và nhiều luồng xử lý đồng thời. Yêu cầu log phải được xâu chuỗi.
 
-**Distributed tracing**: propagate `TraceId` + `SpanId` qua HTTP headers (`traceparent` — W3C standard).
+**Structured Logging**: Sinh ra `Correlation ID` từ Middleware ở đầu request, inject vào mọi log record trong cùng 1 request scope.
 
 ```csharp
 // ASP.NET Core + OpenTelemetry
@@ -894,7 +894,7 @@ builder.Services.AddOpenTelemetry()
         .AddOtlpExporter()); // Export sang Jaeger/Tempo/Datadog
 ```
 
-Kết quả: Gantt chart của toàn bộ request journey. Identify bottleneck chính xác — `ProductService.GetById` tốn 800ms vì N+1 query.
+Kết quả: Gantt chart của toàn bộ request journey qua các module nội bộ. Identify bottleneck chính xác — `ProductModule.GetById` tốn 800ms vì N+1 query.
 
 ---
 

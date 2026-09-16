@@ -2439,7 +2439,7 @@ Use case: offline/mobile apps sync, nhẹ hơn CDC.
 
 ### 7. Application-Level Sync
 
-**Outbox Pattern (recommended cho microservices)**:
+**Outbox Pattern (recommended cho giao dịch chéo module)**:
 ```csharp
 using var transaction = await dbContext.Database.BeginTransactionAsync();
 
@@ -2476,7 +2476,7 @@ SQL Server (CDC) → Debezium Connector → Kafka Topics → Consumers (any plat
 | **Simple DR, budget thấp** | Log Shipping |
 | **Offline/mobile sync** | Change Tracking |
 | **Audit trail** | CDC (lưu old/new values) |
-| **Microservices event sync** | Outbox Pattern + Message Queue |
+| **Data sync giua cac module** | Outbox Pattern + Background Worker |
 | **Bi-directional (legacy)** | Merge Replication (cân nhắc alternatives) |
 
 ### Lưu ý quan trọng

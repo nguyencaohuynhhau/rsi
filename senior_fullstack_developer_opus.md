@@ -356,7 +356,7 @@ const { data, error } = await client.GET("/api/orders/{id}", {
 | Customization | It linh hoat | Dung fetch native, de customize |
 | CI integration | Can .NET runtime | Chi can Node.js |
 
-**Khuyen nghi:** openapi-typescript cho du an moi vi lightweight, tree-shakeable. NSwag phu hop neu team da quen hoac can generate C# client cho microservice-to-microservice. Quan trong nhat: tich hop vao CI -- moi lan build se re-generate types, neu frontend khong compile duoc thi pipeline fail som.
+**Khuyen nghi:** openapi-typescript cho du an moi vi lightweight, tree-shakeable. NSwag phu hop neu team da quen hoac can generate C# client cho cac ung dung ben thu 3. Quan trong nhat: tich hop vao CI -- moi lan build se re-generate types, neu frontend khong compile duoc thi pipeline fail som.
 
 ---
 
@@ -506,7 +506,7 @@ public class ValidationBehavior<TReq, TRes> : IPipelineBehavior<TReq, TRes>
 
 Pipeline behaviors pho bien: **Validation**, **Logging**, **Caching** (cho query), **Transaction** (wrap command trong `BeginTransaction/Commit`), **Performance monitoring**.
 
-**Khi nao overkill:** Du an CRUD don gian, it business logic. Neu handler chi la 3 dong goi DbContext roi return, ban dang tao them complexity khong can thiet. Ngoai ra MediatR tao **indirection** -- khi debug phai nhay qua nhieu lop, dev moi vao team se kho follow flow. Can nhac dung khi co 10+ use cases phuc tap voi cross-cutting concerns ro rang, khong dung cho microservice chi co 3-4 endpoint.
+**Khi nao overkill:** Du an CRUD don gian, it business logic. Neu handler chi la 3 dong goi DbContext roi return, ban dang tao them complexity khong can thiet. Ngoai ra MediatR tao **indirection** -- khi debug phai nhay qua nhieu lop, dev moi vao team se kho follow flow. Can nhac dung khi co 10+ use cases phuc tap voi cross-cutting concerns ro rang, khong dung cho module chi co 3-4 endpoint.
 
 ---
 
