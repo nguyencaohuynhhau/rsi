@@ -190,10 +190,11 @@ Nếu chỉ dựa vào Database, chúng ta có 2 cách tiếp cận để chặn
   - Dùng câu lệnh `SELECT ... WITH (UPDLOCK, ROWLOCK)` để khóa cứng dòng dữ liệu. 
   - Người đầu tiên sẽ giữ khóa (lock) dòng này cho đến khi giao dịch (transaction) hoàn tất. 9.999 người đến sau sẽ bị SQL Server bắt đứng chờ (Block) ở trạng thái chờ khóa.
   - *Trade-off:* An toàn tuyệt đối nhưng gây nghẽn cổ chai (bottleneck) nghiêm trọng. Nếu số lượng truy cập quá lớn, sẽ dẫn đến cạn kiệt Connection Pool và làm sập toàn bộ CSDL. Ít được khuyên dùng cho Flash Sale.
-- **Cách 2: Khóa lạc quan (Optimistic Locking)**
-  - Không khóa dòng dữ liệu lúc SELECT. Thay vào đó, gộp việc kiểm tra vào chính câu lệnh UPDATE (vì bản thân UPDATE trên SQL Server đã có Row-level lock nguyên tử).
+- **Cách 2: Khóa lạc quan (Optimistic Locking) bằng Update nguyên tử**
+  - Không khóa dòng dữ liệu lúc SELECT. Thay vào đó, gộp việc kiểm tra vào chính câu lệnh UPDATE (bản thân lệnh UPDATE trên hệ quản trị CSDL quan hệ luôn được thực thi nguyên tử trên từng dòng).
   - *Ví dụ SQL:* `UPDATE Products SET Stock = Stock - 1 WHERE Id = 1 AND Stock >= 1`
-  - *Kết quả:* Thread đầu tiên chạy sẽ trả về `RowsAffected = 1` (Mua thành công). Những thread sau chạy vào sẽ bị sai điều kiện `Stock >= 1` (vì người đầu tiên đã trừ kho về 0), trả về `RowsAffected = 0` (Hết hàng). EF Core sẽ văng lỗi `DbUpdateConcurrencyException`. Cách này không gây nghẽn CSDL.
+  - *Kết quả:* Về mặt tính toàn vẹn dữ liệu, câu lệnh này **chống bán lố (Race Condition) an toàn 100%**. Thread đầu tiên chạy sẽ trả về `RowsAffected = 1`. Những thread sau chạy vào sẽ bị sai điều kiện `Stock >= 1` (vì tồn kho đã về 0), trả về `RowsAffected = 0` (Hết hàng).
+  - *Vấn đề tử huyệt (Tại sao vẫn cần Redis?):* Dù không bao giờ bị bán lố, nhưng nếu để 10.000 người cùng gọi lệnh UPDATE này trực tiếp vào DB trong cùng 1 giây, SQL Server sẽ bị hiện tượng **Tranh chấp khóa cục bộ (Row-level Lock Contention / Hot Row)**. Hàng ngàn kết nối sẽ kẹt lại ở Database chỉ để đứng xếp hàng chờ được sửa đúng 1 dòng dữ liệu. Điều này sẽ làm cạn kiệt Connection Pool, tăng vọt CPU và kéo sập Database. Đó là lý do ta BẮT BUỘC phải có Tầng 2 (Redis) để che chắn bớt traffic.
 
 #### Tầng 2: Đưa chốt chặn lên RAM với Redis (Bảo vệ Database)
 Để không làm sập Database với 10.000 request, ta phải chặn chúng ở Redis. Trước Flash Sale, nạp tồn kho lên Redis: `await _redisDb.StringSetAsync("product_stock:1", 100);`.
