@@ -180,40 +180,43 @@ Báo cáo này tổng hợp, phân tích và trả lời chuyên sâu các câu 
 
 ## 10. Xử Lý Đồng Thời (Concurrency) & Bài Toán Bán Lố (Over-selling)
 
-### Q: Hệ thống Flash Sale có 1 tồn kho nhưng 10.000 người cùng bấm mua. Làm sao để giải quyết triệt để bài toán Race Condition mà không làm sập Database và tuyệt đối không dùng Lua Script?
+### Q: Hệ thống Flash Sale có 1 tồn kho nhưng 10.000 người cùng bấm mua. Làm sao để giải quyết triệt để bài toán Race Condition và thiết kế hệ thống thế nào để không sập?
 **Trả lời (Góc nhìn Architect):**
-Bài toán này đòi hỏi 3 tầng phòng thủ: Tối ưu CSDL, Chặn request ở RAM (Redis), và Xếp hàng bằng Message Queue (RabbitMQ).
+Bản chất của việc bán lố (over-selling) là do nhiều luồng (thread) cùng đọc được `Stock = 1`, vượt qua vòng kiểm tra `if (stock > 0)` và cùng gọi lệnh Update trừ kho. Để giải quyết, ta cần thiết kế 3 tầng phòng thủ: Tối ưu CSDL (SQL Server), Chặn request ở RAM (Redis), và Xếp hàng bằng Message Queue (RabbitMQ).
 
-**Tầng 1: Khởi tạo và xem tồn kho trên Redis (Cache Layer)**
-- Trước khi Flash Sale bắt đầu, Backend phải nạp số tồn kho từ Database lên Redis bằng lệnh:
-  `await _redisDb.StringSetAsync("product_stock:1", 100);`
-- Để *xem* số lượng tồn kho hiện tại (dùng cho việc hiển thị lên UI), ta dùng lệnh:
-  `long currentStock = (long)await _redisDb.StringGetAsync("product_stock:1");`
-- *Lưu ý:* Tuyệt đối không dùng `StringGetAsync` để kiểm tra `if (currentStock > 0)` rồi mới trừ, vì khoảng hở giữa GET và SET sẽ gây ra Race Condition.
+#### Tầng 1: Khóa ở cấp độ Database (SQL Server)
+Nếu chỉ dựa vào Database, chúng ta có 2 cách tiếp cận để chặn Race Condition:
+- **Cách 1: Khóa bi quan (Pessimistic Locking)**
+  - Dùng câu lệnh `SELECT ... WITH (UPDLOCK, ROWLOCK)` để khóa cứng dòng dữ liệu. 
+  - Người đầu tiên sẽ giữ khóa (lock) dòng này cho đến khi giao dịch (transaction) hoàn tất. 9.999 người đến sau sẽ bị SQL Server bắt đứng chờ (Block) ở trạng thái chờ khóa.
+  - *Trade-off:* An toàn tuyệt đối nhưng gây nghẽn cổ chai (bottleneck) nghiêm trọng. Nếu số lượng truy cập quá lớn, sẽ dẫn đến cạn kiệt Connection Pool và làm sập toàn bộ CSDL. Ít được khuyên dùng cho Flash Sale.
+- **Cách 2: Khóa lạc quan (Optimistic Locking)**
+  - Không khóa dòng dữ liệu lúc SELECT. Thay vào đó, gộp việc kiểm tra vào chính câu lệnh UPDATE (vì bản thân UPDATE trên SQL Server đã có Row-level lock nguyên tử).
+  - *Ví dụ SQL:* `UPDATE Products SET Stock = Stock - 1 WHERE Id = 1 AND Stock >= 1`
+  - *Kết quả:* Thread đầu tiên chạy sẽ trả về `RowsAffected = 1` (Mua thành công). Những thread sau chạy vào sẽ bị sai điều kiện `Stock >= 1` (vì người đầu tiên đã trừ kho về 0), trả về `RowsAffected = 0` (Hết hàng). EF Core sẽ văng lỗi `DbUpdateConcurrencyException`. Cách này không gây nghẽn CSDL.
 
-**Tầng 2: Trừ tồn kho nguyên tử bằng Redis (Bảo vệ Database)**
-Thay vì đâm thẳng 10.000 request vào Database, ta dùng hàm `StringDecrementAsync` của Redis. Đây là một thao tác nguyên tử (Atomic), nó trừ đi 1 và trả về giá trị *sau khi trừ* ngay lập tức.
-```csharp
-long remainingStock = await _redisDb.StringDecrementAsync("product_stock:1");
-if (remainingStock >= 0) {
-    // Kho >= 0 sau khi trừ: User lấy được slot, cho phép đi tiếp vào RabbitMQ
-} else {
-    // Kho rớt xuống số âm: User đến trễ. Báo lỗi "Hết hàng" ngay lập tức (HTTP 400).
-    // Có thể cộng trả lại 1 để số liệu Redis không bị âm sâu:
-    await _redisDb.StringIncrementAsync("product_stock:1"); 
-}
-```
+#### Tầng 2: Đưa chốt chặn lên RAM với Redis (Bảo vệ Database)
+Để không làm sập Database với 10.000 request, ta phải chặn chúng ở Redis. Trước Flash Sale, nạp tồn kho lên Redis: `await _redisDb.StringSetAsync("product_stock:1", 100);`.
+Khi Flash sale diễn ra, ta có 2 cách trừ kho nguyên tử trên Redis:
+- **Cách 1: Trừ kho trực tiếp (Không dùng Lua Script)**
+  - Dùng hàm `StringDecrementAsync`, thao tác này nguyên tử (atomic): trừ 1 và trả về giá trị mới ngay lập tức.
+  - *Code:* `long remainingStock = await _redisDb.StringDecrementAsync("product_stock:1");`
+  - Nếu `remainingStock >= 0` $\rightarrow$ Cho phép đi tiếp. Nếu `< 0` $\rightarrow$ Trả về lỗi "Hết hàng" (HTTP 400).
+- **Cách 2: Dùng Lua Script (Kiểm soát chặt chẽ nhất)**
+  - Redis chạy đơn luồng (single-threaded). Bằng cách gửi một đoạn Lua Script, Redis sẽ thực thi khối code đó nguyên tử từ đầu đến cuối mà không bị can thiệp bởi request khác.
+  - *Lua Script:*
+    ```lua
+    local stock = tonumber(redis.call('GET', KEYS[1]))
+    if stock <= 0 then
+        return 0 -- Hết hàng
+    else
+        redis.call('DECR', KEYS[1])
+        return 1 -- Trừ thành công
+    end
+    ```
+  - *Lợi ích:* Đảm bảo kho không bao giờ rớt xuống số âm (như Cách 1). Trả về chính xác 1 (thành công) hoặc 0 (thất bại).
 
-**Tầng 3: Xếp hàng với RabbitMQ & Cập nhật Database (Optimistic Update)**
-- **API (Producer):** Những người may mắn lọt qua Tầng 2 sẽ được API nhét một message `OrderRequest` vào RabbitMQ và API lập tức trả về HTTP 202 (Accepted) kèm lời nhắn "Hệ thống đang xử lý". Giao diện người dùng sẽ hiện Spinner chờ.
-- **Worker (Consumer):** Đọc tuần tự từng message từ RabbitMQ (`PrefetchCount = 1`). Khi ghi xuống Database, KHÔNG CẦN dùng Pessimistic Lock (khóa bảng rườm rà), ta gộp trực tiếp điều kiện vào câu lệnh UPDATE (Optimistic Update):
-  ```sql
-  UPDATE Products SET Stock = Stock - 1 WHERE Id = 1 AND Stock >= 1
-  ```
-  Lệnh này tận dụng Row-level lock của CSDL. Người đầu tiên sẽ Update thành công (`RowsAffected = 1`). Những người sau (nếu Redis đếm sai do lỗi mạng) cũng sẽ bị CSDL chặn lại (`RowsAffected = 0`).
-
-**Tầng 4: Phản hồi UI với SignalR (WebSockets)**
-Sau khi Worker chạy xong lệnh UPDATE, nó sẽ gửi tin nhắn trực tiếp đến `ConnectionId` của User thông qua SignalR.
-- **Người thành công:** UI tắt Spinner, báo "Thanh toán thành công" và chuyển sang trang giỏ hàng.
-- **Người thất bại:** UI tắt Spinner, báo "Sản phẩm đã hết" và tải lại trang. 
-Cách thiết kế Asynchronous Request-Reply này mang lại trải nghiệm người dùng hoàn hảo và bảo vệ hệ thống tuyệt đối.
+#### Tầng 3: Xếp hàng với RabbitMQ & Cập nhật UI với SignalR
+- **API (Producer):** Những người lọt qua được cửa ải Redis ở Tầng 2 (tức là có hàng) sẽ được Backend nhét message `OrderRequest` vào RabbitMQ. API lập tức trả về HTTP 202 (Accepted) kèm lời nhắn "Hệ thống đang xử lý". Giao diện người dùng sẽ hiện Spinner quay.
+- **Worker (Consumer):** Lấy từng message ra từ RabbitMQ theo thứ tự (`PrefetchCount = 1`) và thong thả thực thi lệnh Update vào Database (Sử dụng Optimistic Update ở Tầng 1 để chốt lần cuối).
+- **Phản hồi UI (SignalR):** Sau khi ghi DB thành công, Worker dùng SignalR bắn message trực tiếp tới `ConnectionId` của User đó: "Chúc mừng, thanh toán thành công!". Trình duyệt nhận được message sẽ tắt Spinner và chuyển hướng đến trang thanh toán. Đây là cơ chế Asynchronous Request-Reply hoàn hảo cho các hệ thống tải cao.
