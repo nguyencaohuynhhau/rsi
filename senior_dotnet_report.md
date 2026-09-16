@@ -370,20 +370,26 @@ Khi 1.000.000 request ập đến Redis trong cùng một phần nghìn giây, R
 Thread duy nhất của Redis sẽ bốc từng lệnh (hoặc cụm Lua Script) ra chạy theo đúng thứ tự: Lệnh 1 xong $\rightarrow$ Lệnh 2 $\rightarrow$ Lệnh 3...
 $\Rightarrow$ **Không bao giờ có 2 lệnh/script được thực thi cùng một lúc trong Redis.**
 
-**2. Tính Nguyên tử (Atomicity) của Lua Script và lệnh `DECR`**
-Khi gọi lệnh trừ kho `DECR` hoặc chạy toàn bộ cục Lua Script, Redis không chia nhỏ quy trình ra làm 3 bước (Đọc $\rightarrow$ Trừ $\rightarrow$ Lưu) có kẽ hở như C# hay Java. Lệnh `DECR` và Lua Script được coi là một khối nguyên tử (Atomic).
-Nó thực hiện phát một, không có bất kỳ request nào khác được phép chen ngang vào giữa quá trình xử lý của kịch bản Lua.
+**2. Tính Nguyên tử (Atomicity) của Lua Script thông qua `ScriptEvaluateAsync`**
+Khi bạn gọi hàm `ScriptEvaluateAsync` từ C#, Redis không chỉ chạy từng lệnh rời rạc mà nó đóng gói toàn bộ đoạn Lua Script thành một **khối nguyên tử (Atomic)** duy nhất. Redis không chia nhỏ quy trình ra làm 3 bước (Đọc $\rightarrow$ Trừ $\rightarrow$ Lưu) có kẽ hở như C# hay Java.
+Nó thực hiện kịch bản phát một từ đầu đến cuối. Tuyệt đối không có bất kỳ request nào khác được phép chen ngang vào giữa quá trình thực thi đoạn code Lua đó.
 
-**3. Điều gì xảy ra bên trong Redis với tồn kho là 10?**
-Giả sử tồn kho ban đầu được SET là `10`. Một triệu người mua số lượng `1` đang xếp hàng thành một hàng dọc chờ Redis xử lý qua Lua Script:
+**3. Cơ chế ép 1.000.000 request song song thành 1 hàng dọc (Multiplexing Pipeline)**
+Để làm được việc chuyển đổi từ xử lý đa luồng (Multi-threading) sang xử lý đơn luồng (Single-threaded) mà không bị nghẽn mạng, hệ thống dựa vào sự phối hợp của cơ chế Multiplexing ở cả hai đầu Client và Server:
+- **Tại phía Client (C# & StackExchange.Redis):** Khác với Database truyền thống (thường duy trì một Connection Pool mở nhiều kết nối song song), thư viện `StackExchange.Redis` được thiết kế theo kiến trúc *Multiplexer*. Dù có 1.000.000 luồng của ASP.NET Core gọi hàm `ScriptEvaluateAsync` cùng lúc, tất cả các lệnh này không mở 1.000.000 socket mạng. Thay vào đó, chúng được đưa vào một **Hàng đợi bộ đệm nội bộ (Internal Queue)** của C# và truyền đi nối đuôi nhau qua **MỘT TCP Socket duy nhất**. Các luồng C# đẩy lệnh vào đường ống rồi lập tức trả thread về cho Thread Pool (nhờ `await`), giúp Web Server không bị sập.
+- **Tại phía Server (Hệ điều hành & Redis):** Tại máy chủ cài đặt Redis (thường là Linux), hệ điều hành sử dụng kỹ thuật I/O Multiplexing (như `epoll`). Khi dòng chảy byte khổng lồ từ C# ập đến trên TCP Socket, OS thu nhận và giao cho Module I/O của Redis phân tích (parse) thành các lệnh độc lập, sau đó nhét tất cả vào một **Command Queue (Hàng đợi lệnh)** bên trong RAM.
+$\Rightarrow$ Chính nhờ cái "phễu" TCP Socket duy nhất và Command Queue này, 1.000.000 request song song của C# đã chính thức bị ép thành **một hàng dọc tuyệt đối** (Strict FIFO).
 
-- **Request 1 (của User A):** Redis chạy Lua Script. `stock` = 10, kiểm tra đủ, gọi `DECRBY`. Tồn kho từ 10 xuống 9. Đẩy vào Stream. Script trả về `1`. (User A lọt qua).
-- **Request 2 (của User B):** Redis chạy Lua Script. `stock` = 9, kiểm tra đủ, gọi `DECRBY`. Tồn kho từ 9 xuống 8. Đẩy vào Stream. Script trả về `1`. (User B lọt qua).
+**4. Điều gì xảy ra bên trong Redis khi tồn kho chỉ có 5?**
+Giả sử tồn kho ban đầu được SET là `5`. Từ hàng dọc đã được tạo ra ở bước 3, luồng xử lý cốt lõi duy nhất (Main Thread) của Redis thong thả bốc từng khối Lua Script ra thực thi nguyên tử:
+
+- **Request 1 (của User A):** Redis bốc Script ra chạy. `stock` = 5, đủ hàng. Gọi `DECRBY`, tồn kho còn 4. Ghi sự kiện vào Stream. Script trả về `1`. (User A lọt qua).
+- **Request 2 (của User B):** Redis bốc Script tiếp theo. `stock` = 4, đủ hàng. Gọi `DECRBY`, tồn kho còn 3. Ghi vào Stream. Script trả về `1`. (User B lọt qua).
 - ...
-- **Request 10 (của User J):** Redis chạy Lua Script. `stock` = 1, kiểm tra đủ, gọi `DECRBY`. Tồn kho từ 1 xuống 0. Đẩy vào Stream. Script trả về `1`. (User J lọt qua và lấy cái cuối cùng).
-- **Request 11 (của User K):** Redis chạy Lua Script. `stock` = 0. Kiểm tra `stock < 1` là True. Script trả về `0` ngay lập tức (Không gọi trừ). (User K bị API báo "Hết hàng").
+- **Request 5 (của User E):** Redis bốc Script. `stock` = 1, đủ hàng. Gọi `DECRBY`, tồn kho rớt xuống 0. Ghi vào Stream. Script trả về `1`. (User E giành được món hàng cuối cùng).
+- **Request 6 (của User F):** Redis bốc Script. Lúc này lệnh `redis.call('GET')` trả về `stock` = 0. Điều kiện `if stock < 1` là True. Script lập tức `return 0` (bỏ qua mọi lệnh phía sau). (User F bị API báo "Hết hàng").
 - ...
-- **Request 1.000.000:** Tồn kho là 0. Bị từ chối ngay lập tức ở dòng `if`. Bị API đá văng ra ngoài bằng mã `400 BadRequest`.
+- **Request 999.999:** Tương tự, tồn kho vẫn là 0. Bị từ chối ngay lập tức ở dòng `if` và Script `return 0`. API đá văng ra ngoài bằng mã HTTP `400 BadRequest`.
 
 **Tóm lại:** Bởi vì Redis chạy **từng-lệnh-một** với tốc độ cực nhanh (có thể xử lý hơn 100.000 lệnh mỗi giây), nên nó giống như một người soát vé đi qua 1 cửa hẹp. Đó là lý do dù 1 triệu người "đập cửa" cùng lúc, Redis vẫn tỉnh bơ chia đúng 10 slot cho 10 người xếp hàng nhanh nhất mà không bao giờ bị "Over-selling" (Bán lố).
 
