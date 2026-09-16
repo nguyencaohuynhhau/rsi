@@ -10,107 +10,107 @@
 
 ---
 
-### Q1. So sanh cac tinh nang nang cao cua C# (records, pattern matching, nullable reference types) voi cac tinh nang tuong duong trong TypeScript. Khi nao ban su dung tung tinh nang trong du an full-stack?
+### Q1. So sánh các tính năng nâng cao của C# (records, pattern matching, nullable reference types) với các tính năng tương đương trong TypeScript. Khi nào bạn sử dụng từng tính năng trong dự án full-stack?
 
 **Answer:**
 
-Records trong C# va `type`/`interface` trong TypeScript deu dung de dinh nghia data model, nhung C# records cung cap value equality, immutability va `with` expression co san o muc ngon ngu, trong khi TypeScript can thu vien ben ngoai hoac convention thu cong.
+Records trong C# và `type`/`interface` trong TypeScript đều dùng để định nghĩa data model, nhưng C# records cung cấp value equality, immutability và `with` expression có sẵn ở mức ngôn ngữ, trong khi TypeScript cần thư viện bên ngoài hoặc convention thủ công.
 
 ```csharp
-// C# (.NET 8) - Record voi pattern matching
+// C# (.NET 8) - Record với pattern matching
 public record OrderDto(string Id, decimal Total, OrderStatus Status);
 
 public string GetStatusMessage(OrderDto order) => order switch
 {
-    { Status: OrderStatus.Pending, Total: > 1000 } => "Don lon cho duyet",
-    { Status: OrderStatus.Shipped } => "Da giao",
-    _ => "Dang xu ly"
+    { Status: OrderStatus.Pending, Total: > 1000 } => "Đơn lớn chờ duyệt",
+    { Status: OrderStatus.Shipped } => "Đã giao",
+    _ => "Đang xử lý"
 };
 
-// Nullable reference types - bat trong .csproj
-public string? GetCustomerName(int id) // compiler canh bao neu dung ma khong check null
+// Nullable reference types - bật trong .csproj
+public string? GetCustomerName(int id) // compiler cảnh báo nếu dùng mà không check null
 ```
 
 ```typescript
-// TypeScript 5+ - Discriminated union thay the pattern matching
+// TypeScript 5+ - Discriminated union thay thế pattern matching
 type Order =
   | { status: "pending"; total: number }
   | { status: "shipped"; trackingId: string };
 
 function getStatusMessage(order: Order): string {
   switch (order.status) {
-    case "pending": return order.total > 1000 ? "Don lon cho duyet" : "Cho xu ly";
-    case "shipped": return `Da giao: ${order.trackingId}`; // TypeScript tu narrowing type
+    case "pending": return order.total > 1000 ? "Đơn lớn chờ duyệt" : "Chờ xử lý";
+    case "shipped": return `Đã giao: ${order.trackingId}`; // TypeScript tự narrowing type
   }
 }
 ```
 
-**Trade-off:** C# records manh hon ve immutability (init-only properties, positional records) nhung TypeScript discriminated unions linh hoat hon cho UI state machine. Nullable reference types trong C# la compile-time check tuong tu TypeScript strict mode -- ca hai deu nen bat tu dau du an, bat giua chung se sinh ra hang tram warning kho xu ly dan.
+**Trade-off:** C# records mạnh hơn về immutability (init-only properties, positional records) nhưng TypeScript discriminated unions linh hoạt hơn cho UI state machine. Nullable reference types trong C# là compile-time check tương tự TypeScript strict mode -- cả hai đều nên bật từ đầu dự án, bật giữa chừng sẽ sinh ra hàng trăm warning khó xử lý dần.
 
 ---
 
-### Q2. Giai thich su khac biet cot loi giua async/await trong C# va JavaScript. Tai sao hieu sai mo hinh threading co the gay bug nghiem trong trong ung dung full-stack?
+### Q2. Giải thích sự khác biệt cốt lõi giữa async/await trong C# và JavaScript. Tại sao hiểu sai mô hình threading có thể gây bug nghiêm trọng trong ứng dụng full-stack?
 
 **Answer:**
 
-Diem khac biet quan trong nhat: C# async/await chay tren thread pool da luong thuc su, con JavaScript async/await chay tren single-threaded event loop. Trong C#, `await` giai phong thread hien tai ve pool va continuation co the chay tren thread khac. Trong JavaScript, `await` chi nhuong quyen lai cho event loop, moi thu van tren mot thread duy nhat.
+Điểm khác biệt quan trọng nhất: C# async/await chạy trên thread pool đa luồng thực sự, còn JavaScript async/await chạy trên single-threaded event loop. Trong C#, `await` giải phóng thread hiện tại về pool và continuation có thể chạy trên thread khác. Trong JavaScript, `await` chỉ nhường quyền lại cho event loop, mọi thứ vẫn trên một thread duy nhất.
 
 ```csharp
-// C# - NGUY HIEM: deadlock trong ASP.NET (legacy SynchronizationContext)
+// C# - NGUY HIỂM: deadlock trong ASP.NET (legacy SynchronizationContext)
 public string GetData()
 {
-    // KHONG BAO GIO LAM THE NAY - .Result block thread, gay deadlock
+    // KHÔNG BAO GIỜ LÀM THẾ NÀY - .Result block thread, gây deadlock
     var result = _httpClient.GetStringAsync("/api/data").Result;
     return result;
 }
 
-// DUNG: async xuyen suot (async all the way)
+// ĐÚNG: async xuyên suốt (async all the way)
 public async Task<string> GetDataAsync()
 {
     var result = await _httpClient.GetStringAsync("/api/data");
-    // Trong .NET 8 minimal API, khong co SynchronizationContext
-    // nen ConfigureAwait(false) khong con can thiet o tang API
+    // Trong .NET 8 minimal API, không có SynchronizationContext
+    // nên ConfigureAwait(false) không còn cần thiết ở tầng API
     return result;
 }
 ```
 
 ```typescript
-// JavaScript - Khong co deadlock kieu C# nhung co pitfall rieng
-// SAI: forEach khong await duoc
+// JavaScript - Không có deadlock kiểu C# nhưng có pitfall riêng
+// SAI: forEach không await được
 async function processOrders(ids: string[]) {
   ids.forEach(async (id) => {
-    await fetchOrder(id); // Fire-and-forget, khong cho thuc su!
+    await fetchOrder(id); // Fire-and-forget, không chờ thực sự!
   });
 }
 
-// DUNG: dung for...of (tuan tu) hoac Promise.all (song song)
+// ĐÚNG: dùng for...of (tuần tự) hoặc Promise.all (song song)
 async function processOrders(ids: string[]) {
   await Promise.all(ids.map((id) => fetchOrder(id))); // song song
-  // hoac: for (const id of ids) { await fetchOrder(id); } // tuan tu
+  // hoặc: for (const id of ids) { await fetchOrder(id); } // tuần tự
 }
 ```
 
-**Pitfall thuc te:** Trong C#, quen `await` mot Task se nuot exception am tham (fire-and-forget). Trong JavaScript, unhandled promise rejection gio crash process trong Node.js. Khi lam full-stack, loi pho bien nhat la dev quen JavaScript nghi C# async cung single-thread, dan den race condition khi truy cap shared state ma khong dung lock hoac ConcurrentDictionary.
+**Pitfall thực tế:** Trong C#, quên `await` một Task sẽ nuốt exception âm thầm (fire-and-forget). Trong JavaScript, unhandled promise rejection giờ crash process trong Node.js. Khi làm full-stack, lỗi phổ biến nhất là dev quen JavaScript nghĩ C# async cũng single-thread, dẫn đến race condition khi truy cập shared state mà không dùng lock hoặc ConcurrentDictionary.
 
 ---
 
-### Q3. React 18+ gioi thieu Concurrent Rendering voi useTransition va useDeferredValue. Giai thich cach hoat dong, so sanh voi debounce truyen thong, va cho vi du tich hop voi .NET API.
+### Q3. React 18+ giới thiệu Concurrent Rendering với useTransition và useDeferredValue. Giải thích cách hoạt động, so sánh với debounce truyền thống, và cho ví dụ tích hợp với .NET API.
 
 **Answer:**
 
-Concurrent Rendering cho phep React tam dung render khong quan trong de uu tien tuong tac nguoi dung (nhu go phim). Khac voi debounce (tri hoan thuc thi), useTransition danh dau state update la "low priority" -- React van bat dau render ngay nhung co the interrupt neu co update uu tien cao hon.
+Concurrent Rendering cho phép React tạm dừng render không quan trọng để ưu tiên tương tác người dùng (như gõ phím). Khác với debounce (trì hoãn thực thi), useTransition đánh dấu state update là "low priority" -- React vẫn bắt đầu render ngay nhưng có thể interrupt nếu có update ưu tiên cao hơn.
 
 ```typescript
-// useTransition - cho action chu dong (user trigger)
+// useTransition - cho action chủ động (user trigger)
 function SearchPage() {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<ProductDto[]>([]);
   const [isPending, startTransition] = useTransition();
 
   const handleSearch = (value: string) => {
-    setQuery(value); // HIGH priority - input phan hoi ngay
+    setQuery(value); // HIGH priority - input phản hồi ngay
     startTransition(async () => {
-      // LOW priority - React co the interrupt render nay
+      // LOW priority - React có thể interrupt render này
       const data = await fetch(`/api/products?q=${value}`).then(r => r.json());
       setResults(data);
     });
@@ -125,7 +125,7 @@ function SearchPage() {
   );
 }
 
-// useDeferredValue - cho gia tri bi dong (derived/prop)
+// useDeferredValue - cho giá trị bị động (derived/prop)
 function ProductList({ items }: { items: ProductDto[] }) {
   const deferredItems = useDeferredValue(items);
   const isStale = items !== deferredItems;
@@ -139,10 +139,10 @@ function ProductList({ items }: { items: ProductDto[] }) {
 ```
 
 ```csharp
-// .NET 8 API endpoint ho tro search
+// .NET 8 API endpoint hỗ trợ search
 app.MapGet("/api/products", async (string? q, AppDbContext db, CancellationToken ct) =>
 {
-    // CancellationToken quan trong: khi React abort request cu, server cung dung query
+    // CancellationToken quan trọng: khi React abort request cũ, server cũng dừng query
     var query = db.Products.AsNoTracking();
     if (!string.IsNullOrEmpty(q))
         query = query.Where(p => EF.Functions.ILike(p.Name, $"%{q}%"));
@@ -150,23 +150,23 @@ app.MapGet("/api/products", async (string? q, AppDbContext db, CancellationToken
 });
 ```
 
-**Trade-off:** useTransition phu hop cho search/filter nang, nhung khong thay the debounce cho API call -- nen ket hop ca hai: debounce (300ms) de giam request den server, useTransition de giu UI responsive trong khi render ket qua. useDeferredValue phu hop hon khi data den tu prop hoac external store ma ban khong kiem soat thoi diem update.
+**Trade-off:** useTransition phù hợp cho search/filter nặng, nhưng không thay thế debounce cho API call -- nên kết hợp cả hai: debounce (300ms) để giảm request đến server, useTransition để giữ UI responsive trong khi render kết quả. useDeferredValue phù hợp hơn khi data đến từ prop hoặc external store mà bạn không kiểm soát thời điểm update.
 
 ---
 
-### Q4. So sanh he thong Dependency Injection cua .NET Core voi cac giai phap state/dependency management trong React (Context API, Zustand, Jotai). Khi nao dung cai nao?
+### Q4. So sánh hệ thống Dependency Injection của .NET Core với các giải pháp state/dependency management trong React (Context API, Zustand, Jotai). Khi nào dùng cái nào?
 
 **Answer:**
 
-.NET Core DI la IoC container hoan chinh quan ly lifetime (Singleton, Scoped, Transient) o tang application, con React Context/Zustand quan ly state va dependency o tang UI component tree. Chung giai quyet bai toan khac nhau nhung cung nguyen ly: tach dependency ra khoi noi su dung.
+.NET Core DI là IoC container hoàn chỉnh quản lý lifetime (Singleton, Scoped, Transient) ở tầng application, còn React Context/Zustand quản lý state và dependency ở tầng UI component tree. Chúng giải quyết bài toán khác nhau nhưng cùng nguyên lý: tách dependency ra khỏi nơi sử dụng.
 
 ```csharp
-// .NET 8 DI - Keyed Services (moi trong .NET 8)
+// .NET 8 DI - Keyed Services (mới trong .NET 8)
 builder.Services.AddKeyedSingleton<ICache, RedisCache>("redis");
 builder.Services.AddKeyedSingleton<ICache, MemoryCache>("memory");
 
 builder.Services.AddScoped<IOrderService, OrderService>();
-// Scoped = 1 instance per HTTP request, quan trong cho DbContext
+// Scoped = 1 instance per HTTP request, quan trọng cho DbContext
 
 public class OrderService(
     [FromKeyedServices("redis")] ICache cache,  // Primary constructor DI (.NET 8)
@@ -179,8 +179,8 @@ public class OrderService(
 ```
 
 ```typescript
-// React - Context cho dependency thuc su (services, config)
-// Zustand cho UI state (nhanh, it boilerplate)
+// React - Context cho dependency thực sự (services, config)
+// Zustand cho UI state (nhanh, ít boilerplate)
 
 import { create } from "zustand";
 
@@ -193,7 +193,7 @@ const useOrderStore = create<OrderStore>((set) => ({
   orders: [],
   fetchOrders: async () => {
     const data = await api.get<Order[]>("/api/orders");
-    set({ orders: data });  // Chi component subscribe orders moi re-render
+    set({ orders: data });  // Chỉ component subscribe orders mới re-render
   },
 }));
 
@@ -201,15 +201,15 @@ const useOrderStore = create<OrderStore>((set) => ({
 const ApiContext = createContext<ApiClient>(null!);
 ```
 
-**Khi nao dung gi:** React Context phu hop cho gia tri it thay doi (theme, auth, API client) vi moi lan value thay doi se re-render toan bo consumer. Zustand/Jotai cho state thay doi thuong xuyen (form, filter, list). Sai lam pho bien la nhet moi thu vao Context gay re-render cascade, hoac dung Redux cho project nho khi Zustand chi can 10 dong code. O backend, pitfall la dang ky DbContext lam Singleton thay vi Scoped -- gay memory leak va stale data.
+**Khi nào dùng gì:** React Context phù hợp cho giá trị ít thay đổi (theme, auth, API client) vì mỗi lần value thay đổi sẽ re-render toàn bộ consumer. Zustand/Jotai cho state thay đổi thường xuyên (form, filter, list). Sai lầm phổ biến là nhét mọi thứ vào Context gây re-render cascade, hoặc dùng Redux cho project nhỏ khi Zustand chỉ cần 10 dòng code. Ở backend, pitfall là đăng ký DbContext làm Singleton thay vì Scoped -- gây memory leak và stale data.
 
 ---
 
-### Q5. Danh gia cac giai phap CSS trong React hien dai: CSS Modules, Tailwind CSS, va CSS-in-JS. Du an nao nen dung giai phap nao?
+### Q5. Đánh giá các giải pháp CSS trong React hiện đại: CSS Modules, Tailwind CSS, và CSS-in-JS. Dự án nào nên dùng giải pháp nào?
 
 **Answer:**
 
-Ba huong tiep can chinh khac nhau o runtime cost, developer experience, va kha nang scale. CSS Modules la zero-runtime voi scoped class names. Tailwind la utility-first voi build-time purging. CSS-in-JS cho phep dynamic styling nhung co runtime overhead.
+Ba hướng tiếp cận chính khác nhau ở runtime cost, developer experience, và khả năng scale. CSS Modules là zero-runtime với scoped class names. Tailwind là utility-first với build-time purging. CSS-in-JS cho phép dynamic styling nhưng có runtime overhead.
 
 ```typescript
 // 1. CSS Modules - zero runtime, scoped tu dong
@@ -228,7 +228,7 @@ const Button = ({ variant }: { variant: "primary" | "danger" }) => (
   </button>
 );
 
-// 3. CSS-in-JS (Emotion) - dynamic styling manh nhung co runtime cost
+// 3. CSS-in-JS (Emotion) - dynamic styling mạnh nhưng có runtime cost
 import styled from "@emotion/styled";
 const Button = styled.button<{ $size: number }>`
   padding: ${(p) => p.$size * 4}px ${(p) => p.$size * 8}px;
@@ -236,22 +236,22 @@ const Button = styled.button<{ $size: number }>`
 `;
 ```
 
-| Tieu chi | CSS Modules | Tailwind | CSS-in-JS |
+| Tiêu chí | CSS Modules | Tailwind | CSS-in-JS |
 |---|---|---|---|
-| Runtime cost | Zero | Zero | Co (parse + inject) |
-| Bundle size | Nho | Rat nho (purged) | Lon hon |
-| Dynamic styling | Kho | Can workaround | Rat manh |
-| Server Components | Tuong thich | Tuong thich | Hau het KHONG tuong thich |
+| Runtime cost | Zero | Zero | Có (parse + inject) |
+| Bundle size | Nhỏ | Rất nhỏ (purged) | Lớn hơn |
+| Dynamic styling | Khó | Cần workaround | Rất mạnh |
+| Server Components | Tương thích | Tương thích | Hầu hết KHÔNG tương thích |
 
-**Khuyen nghi:** Tailwind cho phan lon du an moi (fast iteration, nho gon, tuong thich RSC). CSS Modules cho du an can tach biet ro rang styling voi logic. CSS-in-JS dang giam xu huong vi khong tuong thich React Server Components -- neu can dynamic styling, xem xet Panda CSS hoac Vanilla Extract (zero-runtime CSS-in-JS).
+**Khuyến nghị:** Tailwind cho phần lớn dự án mới (fast iteration, nhỏ gọn, tương thích RSC). CSS Modules cho dự án cần tách biệt rõ ràng styling với logic. CSS-in-JS đang giảm xu hướng vì không tương thích React Server Components -- nếu cần dynamic styling, xem xét Panda CSS hoặc Vanilla Extract (zero-runtime CSS-in-JS).
 
 ---
 
-### Q6. Thiet ke kien truc real-time feature su dung SignalR (.NET) va React. Neu cac gotcha pho bien va cach xu ly.
+### Q6. Thiết kế kiến trúc real-time feature sử dụng SignalR (.NET) và React. Nêu các gotcha phổ biến và cách xử lý.
 
 **Answer:**
 
-SignalR cung cap abstraction tren WebSocket voi fallback (Server-Sent Events, Long Polling) va tich hop san voi .NET authentication/authorization. Kien truc tot can xu ly reconnection, message ordering, va cleanup dung cach o ca hai phia.
+SignalR cung cấp abstraction trên WebSocket với fallback (Server-Sent Events, Long Polling) và tích hợp sẵn với .NET authentication/authorization. Kiến trúc tốt cần xử lý reconnection, message ordering, và cleanup đúng cách ở cả hai phía.
 
 ```csharp
 // .NET 8 - Strongly-typed Hub
