@@ -285,17 +285,107 @@ Với Flash Sale thông thường, sự đảo lộn vài mili-giây này không
   end
   ```
 
-  *C# Backend API (Gọi Script thay vì ném vào RabbitMQ):*
+  *C# Backend API (Code hoàn chỉnh - Triển khai thực tế trên ASP.NET Core):*
   ```csharp
-  var script = @"..."; // Đặt chuỗi Lua script ở trên vào đây
-  var result = (int)await _redisDb.ScriptEvaluateAsync(script, 
-      new RedisKey[] { "product_stock:1", "order_stream:product:1" }, 
-      new RedisValue[] { 2, "user_999" } // VD: User_999 muốn mua số lượng 2
-  );
+  [ApiController]
+  [Route("api/[controller]")]
+  public class FlashSaleController : ControllerBase
+  {
+      private readonly IDatabase _redisDb;
+      private readonly ILogger<FlashSaleController> _logger;
 
-  if (result == 1) return Ok("Hệ thống đang xử lý đơn hàng...");
-  else return BadRequest("Đã hết hàng!");
+      public FlashSaleController(IConnectionMultiplexer redis, ILogger<FlashSaleController> logger)
+      {
+          _redisDb = redis.GetDatabase();
+          _logger = logger;
+      }
+
+      [HttpPost("buy")]
+      public async Task<IActionResult> BuyProduct([FromBody] BuyProductRequest request)
+      {
+          // 1. Khai báo Keys và Args truyền vào Lua Script
+          var stockKey = new RedisKey($"product_stock:{request.ProductId}");
+          var streamKey = new RedisKey($"order_stream:product:{request.ProductId}");
+          
+          var args = new RedisValue[] 
+          { 
+              request.Quantity,          // ARGV[1]
+              request.UserId.ToString()  // ARGV[2]
+          };
+
+          // 2. Định nghĩa Lua Script (Thường lưu ở một static string hoặc file .lua riêng)
+          var luaScript = @"
+              local stockKey = KEYS[1]
+              local streamKey = KEYS[2]
+              local requestedQty = tonumber(ARGV[1])
+              local userId = ARGV[2]
+
+              local currentStock = tonumber(redis.call('GET', stockKey))
+              if not currentStock or currentStock < requestedQty then
+                  return 0 -- Không đủ hàng
+              else
+                  -- Trừ kho và đẩy Message vào Stream trong cùng 1 transaction nguyên tử
+                  redis.call('DECRBY', stockKey, requestedQty)
+                  redis.call('XADD', streamKey, '*', 'UserId', userId, 'Quantity', requestedQty)
+                  return 1 -- Thành công
+              end
+          ";
+
+          try
+          {
+              // 3. Thực thi nguyên tử trên Redis
+              var result = (int)await _redisDb.ScriptEvaluateAsync(luaScript, new[] { stockKey, streamKey }, args);
+
+              // 4. Trả về kết quả ngay lập tức (Fail-fast)
+              if (result == 1)
+              {
+                  _logger.LogInformation("User {UserId} reserved {Qty} items. Queued.", request.UserId, request.Quantity);
+                  return Accepted(new { Message = "Đơn hàng đang được xử lý..." }); // HTTP 202
+              }
+              
+              _logger.LogWarning("User {UserId} failed to buy. Out of stock.", request.UserId);
+              return BadRequest(new { Message = "Sản phẩm đã hết hàng!" }); // HTTP 400
+          }
+          catch (Exception ex)
+          {
+              _logger.LogError(ex, "Redis error during flash sale");
+              return StatusCode(500, "Lỗi hệ thống cục bộ, vui lòng thử lại sau.");
+          }
+      }
+  }
+
+  public record BuyProductRequest(int ProductId, int UserId, int Quantity);
   ```
+
+#### Tại sao Redis có thể chặn đứng 999.999 request cùng lúc mà không bị Race Condition?
+Để hiểu được tại sao Redis có thể chặn đứng hàng trăm ngàn request một cách chính xác tuyệt đối mà không bị nhầm lẫn, chúng ta cần nhìn sâu vào **bản chất kiến trúc lõi (Core Architecture)** của Redis.
+
+Đứng ở góc độ Backend Architect, đây là lời giải thích tại sao Redis làm được điều kỳ diệu đó:
+
+**1. Kiến trúc Đơn luồng (Single-Threaded Event Loop)**
+Trong khi các web server (như ASP.NET Core, Tomcat) dùng hàng ngàn thread (luồng) để xử lý hàng ngàn request song song, thì **Redis chỉ dùng đúng 1 thread duy nhất** để thực thi các lệnh đọc/ghi dữ liệu.
+
+Khi 1.000.000 request ập đến Redis trong cùng một phần nghìn giây, Redis không chạy chúng song song. Thay vào đó, bộ cân bằng mạng (Multiplexing / epoll) của hệ điều hành sẽ nhét 1 triệu request này vào một **Hàng đợi lệnh (Command Queue)** bên trong Redis.
+
+Thread duy nhất của Redis sẽ bốc từng lệnh (hoặc cụm Lua Script) ra chạy theo đúng thứ tự: Lệnh 1 xong $\rightarrow$ Lệnh 2 $\rightarrow$ Lệnh 3...
+$\Rightarrow$ **Không bao giờ có 2 lệnh/script được thực thi cùng một lúc trong Redis.**
+
+**2. Tính Nguyên tử (Atomicity) của Lua Script và lệnh `DECR`**
+Khi gọi lệnh trừ kho `DECR` hoặc chạy toàn bộ cục Lua Script, Redis không chia nhỏ quy trình ra làm 3 bước (Đọc $\rightarrow$ Trừ $\rightarrow$ Lưu) có kẽ hở như C# hay Java. Lệnh `DECR` và Lua Script được coi là một khối nguyên tử (Atomic).
+Nó thực hiện phát một, không có bất kỳ request nào khác được phép chen ngang vào giữa quá trình xử lý của kịch bản Lua.
+
+**3. Điều gì xảy ra bên trong Redis với tồn kho là 10?**
+Giả sử tồn kho ban đầu được SET là `10`. Một triệu người mua số lượng `1` đang xếp hàng thành một hàng dọc chờ Redis xử lý qua Lua Script:
+
+- **Request 1 (của User A):** Redis chạy Lua Script. `stock` = 10, kiểm tra đủ, gọi `DECRBY`. Tồn kho từ 10 xuống 9. Đẩy vào Stream. Script trả về `1`. (User A lọt qua).
+- **Request 2 (của User B):** Redis chạy Lua Script. `stock` = 9, kiểm tra đủ, gọi `DECRBY`. Tồn kho từ 9 xuống 8. Đẩy vào Stream. Script trả về `1`. (User B lọt qua).
+- ...
+- **Request 10 (của User J):** Redis chạy Lua Script. `stock` = 1, kiểm tra đủ, gọi `DECRBY`. Tồn kho từ 1 xuống 0. Đẩy vào Stream. Script trả về `1`. (User J lọt qua và lấy cái cuối cùng).
+- **Request 11 (của User K):** Redis chạy Lua Script. `stock` = 0. Kiểm tra `stock < 1` là True. Script trả về `0` ngay lập tức (Không gọi trừ). (User K bị API báo "Hết hàng").
+- ...
+- **Request 1.000.000:** Tồn kho là 0. Bị từ chối ngay lập tức ở dòng `if`. Bị API đá văng ra ngoài bằng mã `400 BadRequest`.
+
+**Tóm lại:** Bởi vì Redis chạy **từng-lệnh-một** với tốc độ cực nhanh (có thể xử lý hơn 100.000 lệnh mỗi giây), nên nó giống như một người soát vé đi qua 1 cửa hẹp. Đó là lý do dù 1 triệu người "đập cửa" cùng lúc, Redis vẫn tỉnh bơ chia đúng 10 slot cho 10 người xếp hàng nhanh nhất mà không bao giờ bị "Over-selling" (Bán lố).
 
   *C# Background Worker (Đọc từ Stream để chốt DB):*
   ```csharp

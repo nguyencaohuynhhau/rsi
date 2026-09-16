@@ -2,15 +2,15 @@
 
 ---
 
-## Cau 1: Index la gi?
+## Câu 1: Index là gì?
 
-### Dinh nghia
+### Định nghĩa
 
-Index la mot **cau truc du lieu** duoc tao tren mot hoac nhieu columns cua table, giup SQL Server **tim kiem du lieu nhanh hon** ma khong can quet toan bo bang. Tuong tu nhu **muc luc cua mot cuon sach** -- thay vi doc tu trang 1 den trang 500 de tim mot chu de, ban chi can mo muc luc, tra cuu ten chu de, va nhay thang den so trang tuong ung.
+Index là một **cấu trúc dữ liệu** được tạo trên một hoặc nhiều columns của table, giúp SQL Server **tìm kiếm dữ liệu nhanh hơn** mà không cần quét toàn bộ bảng. Tương tự như **mục lục của một cuốn sách** -- thay vì đọc từ trang 1 đến trang 500 để tìm một chủ đề, bạn chỉ cần mở mục lục, tra cứu tên chủ đề, và nhảy thẳng đến số trang tương ứng.
 
-### Cau truc ben trong: B-Tree (Balanced Tree)
+### Cấu trúc bên trong: B-Tree (Balanced Tree)
 
-SQL Server su dung cau truc **B-Tree** cho hau het cac loai index:
+SQL Server sử dụng cấu trúc **B-Tree** cho hầu hết các loại index:
 
 ```
             [Root Node]
@@ -20,20 +20,20 @@ SQL Server su dung cau truc **B-Tree** cho hau het cac loai index:
   [L1] [L2] [L3] [L4]  [L5] [L6]    ← Leaf Nodes
 ```
 
-- **Root Node**: diem bat dau, chua cac key range de dinh huong tim kiem
-- **Intermediate Nodes**: cac tang trung gian, thu hep pham vi tim kiem
-- **Leaf Nodes**: tang la, chua du lieu thuc te hoac con tro den du lieu
+- **Root Node**: điểm bắt đầu, chứa các key range để định hướng tìm kiếm
+- **Intermediate Nodes**: các tầng trung gian, thu hẹp phạm vi tìm kiếm
+- **Leaf Nodes**: tầng lá, chứa dữ liệu thực tế hoặc con trỏ đến dữ liệu
 
-Voi B-Tree, moi lan tim kiem chi can duyet **O(log n)** nodes thay vi **O(n)** rows. Mot bang 1 trieu rows chi can khoang 3-4 lan nhay (levels) la tim duoc row can thiet.
+Với B-Tree, mỗi lần tìm kiếm chỉ cần duyệt **O(log n)** nodes thay vì **O(n)** rows. Một bảng 1 triệu rows chỉ cần khoảng 3-4 lần nhảy (levels) là tìm được row cần thiết.
 
 ### Clustered Index vs Non-Clustered Index
 
-| Dac diem | Clustered Index | Non-Clustered Index |
+| Đặc điểm | Clustered Index | Non-Clustered Index |
 |---|---|---|
-| Leaf node chua | **Du lieu thuc te** (data rows) | **Con tro** (RID hoac Clustered Key) |
-| So luong / table | **Chi 1** | **Toi da 999** |
-| Thu tu vat ly | Quyet dinh thu tu luu tru vat ly cua data | Khong anh huong thu tu vat ly |
-| Kich thuoc | Chinh la bang du lieu | Cau truc rieng biet, nho hon |
+| Leaf node chứa | **Dữ liệu thực tế** (data rows) | **Con trỏ** (RID hoặc Clustered Key) |
+| Số lượng / table | **Chỉ 1** | **Tối đa 999** |
+| Thứ tự vật lý | Quyết định thứ tự lưu trữ vật lý của data | Không ảnh hưởng thứ tự vật lý |
+| Kích thước | Chính là bảng dữ liệu | Cấu trúc riêng biệt, nhỏ hơn |
 
 ```
 -- Clustered Index (leaf = data rows)
@@ -42,30 +42,30 @@ Leaf: [1, "Nguyen Van A", "HN"] → [2, "Tran Thi B", "HCM"] → [3, "Le Van C",
 -- Non-Clustered Index (leaf = pointers)
 Leaf: ["HCM" → Row 2] → ["DN" → Row 3] → ["HN" → Row 1]
             ↓                    ↓                  ↓
-     (quay lai Clustered Index hoac RID de lay full row)
+     (quay lại Clustered Index hoặc RID để lấy full row)
 ```
 
 ### Trade-offs
 
-**Loi ich:**
-- Tang toc **SELECT** dang ke -- tu quet toan bo bang xuong chi vai IO operations
-- Ho tro **ORDER BY**, **GROUP BY**, **JOIN** hieu qua hon
+**Lợi ích:**
+- Tăng tốc **SELECT** đáng kể -- từ quét toàn bộ bảng xuống chỉ vài IO operations
+- Hỗ trợ **ORDER BY**, **GROUP BY**, **JOIN** hiệu quả hơn
 
-**Chi phi:**
-- **INSERT**: phai chen them entry vao moi index lien quan
-- **UPDATE**: neu update column nam trong index, phai cap nhat ca data lan index
-- **DELETE**: phai xoa entry tuong ung trong tat ca indexes
-- **Storage**: moi index chiem them dung luong disk (co the len toi 20-40% kich thuoc bang goc)
+**Chi phí:**
+- **INSERT**: phải chèn thêm entry vào mọi index liên quan
+- **UPDATE**: nếu update column nằm trong index, phải cập nhật cả data lẫn index
+- **DELETE**: phải xóa entry tương ứng trong tất cả indexes
+- **Storage**: mỗi index chiếm thêm dung lượng disk (có thể lên tới 20-40% kích thước bảng gốc)
 
-**Vi du thuc te:** Mot bang `Orders` 10 trieu rows co 8 indexes. Moi lan INSERT 1 row, SQL Server phai ghi vao 9 noi (1 data + 8 indexes). Neu batch insert 100k rows/ngay, chi phi maintain index la dang ke.
+**Ví dụ thực tế:** Một bảng `Orders` 10 triệu rows có 8 indexes. Mỗi lần INSERT 1 row, SQL Server phải ghi vào 9 nơi (1 data + 8 indexes). Nếu batch insert 100k rows/ngày, chi phí maintain index là đáng kể.
 
-> **Quy tac**: Index giong nhu "danh doi thoi gian ghi de lay thoi gian doc". Phu hop khi he thong **doc nhieu hon ghi** (OLTP thong thuong: 80% read, 20% write).
+> **Quy tắc**: Index giống như "đánh đổi thời gian ghi để lấy thời gian đọc". Phù hợp khi hệ thống **đọc nhiều hơn ghi** (OLTP thông thường: 80% read, 20% write).
 
 ---
 
-## Cau 2: Co bao nhieu loai index?
+## Câu 2: Có bao nhiêu loại index?
 
-SQL Server ho tro nhieu loai index, moi loai phuc vu muc dich khac nhau:
+SQL Server hỗ trợ nhiều loại index, mỗi loại phục vụ mục đích khác nhau:
 
 ### 1. Clustered Index
 
@@ -82,9 +82,9 @@ CREATE CLUSTERED INDEX CIX_Employees_EmployeeId
 ON Employees(EmployeeId);
 ```
 
-- **Chi 1 per table** vi no quyet dinh thu tu luu tru vat ly cua du lieu
-- **Nen chon column**: narrow (nho), unique, ever-increasing (IDENTITY, NEWSEQUENTIALID)
-- **Tranh dung GUID (NEWID())** lam clustered key vi random → page splits → fragmentation
+- **Chỉ 1 per table** vì nó quyết định thứ tự lưu trữ vật lý của dữ liệu
+- **Nên chọn column**: narrow (nhỏ), unique, ever-increasing (IDENTITY, NEWSEQUENTIALID)
+- **Tránh dùng GUID (NEWID())** làm clustered key vì random → page splits → fragmentation
 
 ### 2. Non-Clustered Index
 
@@ -93,11 +93,11 @@ CREATE NONCLUSTERED INDEX IX_Employees_Email
 ON Employees(Email);
 ```
 
-- Toi da **999** non-clustered indexes per table
-- Tao cau truc B-Tree rieng biet, leaf node chua:
-  - **Clustered Key** (neu bang co clustered index) de quay lai lay data
-  - **RID** - Row Identifier (neu bang la heap, khong co clustered index)
-- Moi key lookup tu non-clustered ve clustered index la **1 random I/O** → dat neu nhieu rows
+- Tối đa **999** non-clustered indexes per table
+- Tạo cấu trúc B-Tree riêng biệt, leaf node chứa:
+  - **Clustered Key** (nếu bảng có clustered index) để quay lại lấy data
+  - **RID** - Row Identifier (nếu bảng là heap, không có clustered index)
+- Mỗi key lookup từ non-clustered về clustered index là **1 random I/O** → đắt nếu nhiều rows
 
 ### 3. Unique Index
 
@@ -106,10 +106,10 @@ CREATE UNIQUE INDEX UX_Employees_Email
 ON Employees(Email);
 ```
 
-- Dam bao **khong co gia tri trung lap** trong column(s)
-- SQL Server cho phep **chi 1 NULL** trong Unique Index (vi coi NULL = NULL khi so sanh uniqueness)
-- Muon nhieu NULLs + unique cho non-null → dung Filtered Index (xem ben duoi)
-- `UNIQUE CONSTRAINT` thuc chat tao Unique Index phia sau
+- Đảm bảo **không có giá trị trùng lặp** trong column(s)
+- SQL Server cho phép **chỉ 1 NULL** trong Unique Index (vì coi NULL = NULL khi so sánh uniqueness)
+- Muốn nhiều NULLs + unique cho non-null → dùng Filtered Index (xem bên dưới)
+- `UNIQUE CONSTRAINT` thực chất tạo Unique Index phía sau
 
 ### 4. Composite Index (Multi-column Index)
 
@@ -118,27 +118,27 @@ CREATE INDEX IX_Orders_Status_Date
 ON Orders(Status, OrderDate DESC, CustomerId);
 ```
 
-**Leftmost Prefix Rule** -- rat quan trong:
+**Leftmost Prefix Rule** -- rất quan trọng:
 
 ```
 Index: (Status, OrderDate, CustomerId)
 
--- SU DUNG DUOC index:
-WHERE Status = 'Active'                                    -- dung cot 1
-WHERE Status = 'Active' AND OrderDate > '2024-01-01'      -- dung cot 1, 2
+-- SỬ DỤNG ĐƯỢC index:
+WHERE Status = 'Active'                                    -- dùng cột 1
+WHERE Status = 'Active' AND OrderDate > '2024-01-01'      -- dùng cột 1, 2
 WHERE Status = 'Active' AND OrderDate > '2024-01-01'
-      AND CustomerId = 5                                   -- dung ca 3 cot
+      AND CustomerId = 5                                   -- dùng cả 3 cột
 
--- KHONG SU DUNG DUOC index:
-WHERE OrderDate > '2024-01-01'                  -- thieu cot 1 (Status)
-WHERE CustomerId = 5                            -- thieu cot 1, 2
-WHERE OrderDate > '2024-01-01' AND CustomerId = 5  -- thieu cot 1
+-- KHÔNG SỬ DỤNG ĐƯỢC index:
+WHERE OrderDate > '2024-01-01'                  -- thiếu cột 1 (Status)
+WHERE CustomerId = 5                            -- thiếu cột 1, 2
+WHERE OrderDate > '2024-01-01' AND CustomerId = 5  -- thiếu cột 1
 ```
 
-**Thu tu columns trong composite index rat quan trong:**
-- Dat column co **equality filter** (=) truoc
-- Dat column co **range filter** (>, <, BETWEEN) sau
-- Dat column dung cho **ORDER BY** cuoi cung
+**Thứ tự columns trong composite index rất quan trọng:**
+- Đặt column có **equality filter** (=) trước
+- Đặt column có **range filter** (>, <, BETWEEN) sau
+- Đặt column dùng cho **ORDER BY** cuối cùng
 
 ### 5. Covering Index / INCLUDE Columns
 
@@ -148,54 +148,54 @@ ON Orders(CustomerId)
 INCLUDE (OrderDate, TotalAmount, Status);
 ```
 
-- **INCLUDE columns** duoc luu o **leaf level** cua index nhung **khong nam trong key**
-- Giup **tranh Key Lookup** hoan toan -- query chi can doc index ma khong can quay lai table
-- INCLUDE columns **khong anh huong thu tu sap xep** cua index
-- Khi nao dung: query can them vai columns ngoai key columns de SELECT
+- **INCLUDE columns** được lưu ở **leaf level** của index nhưng **không nằm trong key**
+- Giúp **tránh Key Lookup** hoàn toàn -- query chỉ cần đọc index mà không cần quay lại table
+- INCLUDE columns **không ảnh hưởng thứ tự sắp xếp** của index
+- Khi nào dùng: query cần thêm vài columns ngoài key columns để SELECT
 
 ```sql
--- Query nay duoc "cover" hoan toan boi index tren:
+-- Query này được "cover" hoàn toàn bởi index trên:
 SELECT OrderDate, TotalAmount, Status
 FROM Orders
 WHERE CustomerId = 123;
--- Execution plan se hien: Index Seek (khong co Key Lookup)
+-- Execution plan sẽ hiện: Index Seek (không có Key Lookup)
 ```
 
 ### 6. Filtered Index
 
 ```sql
--- Chi index nhung orders dang active
+-- Chỉ index những orders đang active
 CREATE INDEX IX_Orders_Active
 ON Orders(OrderDate, CustomerId)
 WHERE Status = 'Active';
 
--- Unique index cho phep nhieu NULLs
+-- Unique index cho phép nhiều NULLs
 CREATE UNIQUE INDEX UX_Employees_SSN
 ON Employees(SSN)
 WHERE SSN IS NOT NULL;
 ```
 
-- Chi index **mot subset** cua rows thoa dieu kien WHERE
-- **Nho hon**, **nhanh hon** maintain, **it ton storage**
-- Rat huu ich khi phan lon queries chi quan tam mot phan du lieu (VD: chi records active, chi don hang chua xu ly)
+- Chỉ index **một subset** của rows thỏa điều kiện WHERE
+- **Nhỏ hơn**, **nhanh hơn** maintain, **ít tốn storage**
+- Rất hữu ích khi phần lớn queries chỉ quan tâm một phần dữ liệu (VD: chỉ records active, chỉ đơn hàng chưa xử lý)
 
 ### 7. Columnstore Index
 
 ```sql
--- Clustered Columnstore (thay the toan bo storage cua table)
+-- Clustered Columnstore (thay thế toàn bộ storage của table)
 CREATE CLUSTERED COLUMNSTORE INDEX CCIX_FactSales
 ON FactSales;
 
--- Non-Clustered Columnstore (them vao table co san)
+-- Non-Clustered Columnstore (thêm vào table có sẵn)
 CREATE NONCLUSTERED COLUMNSTORE INDEX NCCIX_Orders_Analytics
 ON Orders(OrderDate, ProductId, Quantity, TotalAmount);
 ```
 
-- Luu tru du lieu **theo cot** thay vi theo hang
-- **Nen du lieu** rat tot (10x compression ratio la binh thuong)
-- **Batch mode execution**: xu ly hang ngan rows cung luc thay vi tung row
-- Phu hop cho **analytics, reporting, data warehouse** (OLAP)
-- Khong phu hop cho **point lookups** (tim 1 row cu the)
+- Lưu trữ dữ liệu **theo cột** thay vì theo hàng
+- **Nén dữ liệu** rất tốt (10x compression ratio là bình thường)
+- **Batch mode execution**: xử lý hàng ngàn rows cùng lúc thay vì từng row
+- Phù hợp cho **analytics, reporting, data warehouse** (OLAP)
+- Không phù hợp cho **point lookups** (tìm 1 row cụ thể)
 
 ### 8. Full-Text Index
 
@@ -205,16 +205,16 @@ CREATE FULLTEXT CATALOG ftCatalog AS DEFAULT;
 CREATE FULLTEXT INDEX ON Articles(Title, Content)
 KEY INDEX PK_Articles ON ftCatalog;
 
--- Su dung:
+-- Sử dụng:
 SELECT * FROM Articles
 WHERE CONTAINS(Content, '"SQL Server" NEAR "performance"');
 
 SELECT * FROM Articles
-WHERE FREETEXT(Content, N'toi uu hieu suat truy van');
+WHERE FREETEXT(Content, N'tối ưu hiệu suất truy vấn');
 ```
 
-- Tim kiem **noi dung van ban** phuc tap: tu dong, cum tu, gan nhau, dong nghia
-- SQL Server dung **inverted index** rieng biet, khong phai B-Tree
+- Tìm kiếm **nội dung văn bản** phức tạp: từ đồng nghĩa, cụm từ, gần nhau
+- SQL Server dùng **inverted index** riêng biệt, không phải B-Tree
 
 ### 9. Spatial Index
 
@@ -223,8 +223,8 @@ CREATE SPATIAL INDEX SIX_Stores_Location
 ON Stores(GeoLocation);
 ```
 
-- Danh cho du lieu **geography/geometry**: toa do GPS, vung, duong
-- Su dung cau truc grid hierarchy de chia khong gian
+- Dành cho dữ liệu **geography/geometry**: tọa độ GPS, vùng, đường
+- Sử dụng cấu trúc grid hierarchy để chia không gian
 
 ### 10. XML Index
 
@@ -237,8 +237,8 @@ ON Settings(XmlData)
 USING XML INDEX PIX_Config FOR PATH;
 ```
 
-- Primary XML Index: shred XML thanh relational format noi bo
-- Secondary XML Index: toi uu cho PATH, VALUE, hoac PROPERTY queries
+- Primary XML Index: shred XML thành relational format nội bộ
+- Secondary XML Index: tối ưu cho PATH, VALUE, hoặc PROPERTY queries
 
 ### Tong hop nhanh
 
@@ -268,93 +268,93 @@ USING XML INDEX PIX_Config FOR PATH;
 ```
 Selectivity = Number of Distinct Values / Total Rows
 
-Gender:  2 / 1,000,000 = 0.000002  → Cuc ky thap
-Email:   1,000,000 / 1,000,000 = 1.0  → Cuc ky cao (ly tuong)
-Status:  5 / 1,000,000 = 0.000005  → Thap
+Gender:  2 / 1,000,000 = 0.000002  → Cực kỳ thấp
+Email:   1,000,000 / 1,000,000 = 1.0  → Cực kỳ cao (lý tưởng)
+Status:  5 / 1,000,000 = 0.000005  → Thấp
 ```
 
-Khi selectivity thap, index tra ve **qua nhieu rows** (50% neu Male/Female dong deu). SQL Server Query Optimizer se **tu dong bo qua index** va chon **Table Scan** (hoac Clustered Index Scan) vi:
+Khi selectivity thấp, index trả về **quá nhiều rows** (50% nếu Male/Female đồng đều). SQL Server Query Optimizer sẽ **tự động bỏ qua index** và chọn **Table Scan** (hoặc Clustered Index Scan) vì:
 
 ```
--- Gia su 1 trieu rows, 50% Male, 50% Female
--- Dung index: 500,000 Index Seeks + 500,000 Key Lookups = 1,000,000 random I/O
--- Table scan: 1 sequential scan qua toan bo table = nhanh hon nhieu
+-- Giả sử 1 triệu rows, 50% Male, 50% Female
+-- Dùng index: 500,000 Index Seeks + 500,000 Key Lookups = 1,000,000 random I/O
+-- Table scan: 1 sequential scan qua toàn bộ table = nhanh hơn nhiều
 ```
 
-**Nguong selectivity**: SQL Server thuong chon index khi query tra ve khoang **< 15-30%** tong rows (con tuy vao nhieu yeu to khac). Gender voi 50/50 se khong bao gio dat nguong nay.
+**Ngưỡng selectivity**: SQL Server thường chọn index khi query trả về khoảng **< 15-30%** tổng rows (còn tùy vào nhiều yếu tố khác). Gender với 50/50 sẽ không bao giờ đạt ngưỡng này.
 
-### Khi nao CO THE danh index cho Gender?
+### Khi nào CÓ THỂ đánh index cho Gender?
 
-**Truong hop 1: Filtered Index khi du lieu lech (skewed data)**
+**Trường hợp 1: Filtered Index khi dữ liệu lệch (skewed data)**
 
 ```sql
--- 95% Male, chi 5% Female → filter Female co selectivity cao
+-- 95% Male, chỉ 5% Female → filter Female có selectivity cao
 CREATE INDEX IX_Employees_Gender_Female
 ON Employees(Gender, HireDate)
 WHERE Gender = 'Female';
 
--- Query nay se dung index:
+-- Query này sẽ dùng index:
 SELECT * FROM Employees
 WHERE Gender = 'Female' AND HireDate > '2024-01-01';
 ```
 
-**Truong hop 2: Composite Index ket hop voi columns khac**
+**Trường hợp 2: Composite Index kết hợp với columns khác**
 
 ```sql
--- Gender ket hop voi columns co selectivity cao
+-- Gender kết hợp với columns có selectivity cao
 CREATE INDEX IX_Employees_Gender_DeptId_Salary
 ON Employees(DepartmentId, Gender, Salary);
 
--- Query nay co the dung index hieu qua:
+-- Query này có thể dùng index hiệu quả:
 SELECT * FROM Employees
 WHERE DepartmentId = 10 AND Gender = 'Male' AND Salary > 50000;
 ```
 
-**Truong hop 3: Covering Index**
+**Trường hợp 3: Covering Index**
 
 ```sql
 CREATE INDEX IX_Employees_Gender_Cover
 ON Employees(Gender)
 INCLUDE (FullName, Email);
 
--- Neu query chi can cac columns trong index → Index-only scan, khong Key Lookup
+-- Nếu query chỉ cần các columns trong index → Index-only scan, không Key Lookup
 SELECT FullName, Email FROM Employees WHERE Gender = 'Female';
--- Van scan nhieu rows nhung tranh duoc random I/O ve clustered index
+-- Vẫn scan nhiều rows nhưng tránh được random I/O về clustered index
 ```
 
 ### bit vs string cho Gender
 
 ```sql
--- bit: 1 byte cho moi 8 bit columns (tiet kiem)
-Gender BIT -- 0 hoac 1
+-- bit: 1 byte cho mỗi 8 bit columns (tiết kiệm)
+Gender BIT -- 0 hoặc 1
 
--- string: ton hon nhung doc duoc
+-- string: tốn hơn nhưng đọc được
 Gender VARCHAR(10) -- 'Male', 'Female'
 Gender CHAR(1) -- 'M', 'F'
 ```
 
-Du dung kieu du lieu nao, **van de cot loi la selectivity thap** → index don le khong hieu qua. Tuy nhien, `BIT` hoac `CHAR(1)` giup **Composite Index nho hon** (vi key size nho), nen uu tien kieu du lieu nho.
+Dù dùng kiểu dữ liệu nào, **vấn đề cốt lõi là selectivity thấp** → index đơn lẻ không hiệu quả. Tuy nhiên, `BIT` hoặc `CHAR(1)` giúp **Composite Index nhỏ hơn** (vì key size nhỏ), nên ưu tiên kiểu dữ liệu nhỏ.
 
-### Ket luan
+### Kết luận
 
-| Tinh huong | Danh index? |
+| Tình huống | Đánh index? |
 |---|---|
-| Index don le tren Gender | **Khong** |
-| Du lieu lech (5/95%) + Filtered Index | **Co the** |
-| Composite Index voi columns khac | **Co** |
-| Covering Index tranh Key Lookup | **Xem xet** |
+| Index đơn lẻ trên Gender | **Không** |
+| Dữ liệu lệch (5/95%) + Filtered Index | **Có thể** |
+| Composite Index với columns khác | **Có** |
+| Covering Index tránh Key Lookup | **Xem xét** |
 
 ---
 
-## Cau 4: Co danh duoc index tren truong Nullable khong?
+## Câu 4: Có đánh được index trên trường Nullable không?
 
-### Cau tra loi: CO - SQL Server hoan toan ho tro
+### Câu trả lời: CÓ - SQL Server hoàn toàn hỗ trợ
 
-SQL Server **luu tru gia tri NULL trong index B-Tree** binh thuong. NULL duoc coi la gia tri nho nhat, nen:
-- Voi index **ASC**: cac NULL entries nam o **dau** cua index
-- Voi index **DESC**: cac NULL entries nam o **cuoi** cua index
+SQL Server **lưu trữ giá trị NULL trong index B-Tree** bình thường. NULL được coi là giá trị nhỏ nhất, nên:
+- Với index **ASC**: các NULL entries nằm ở **đầu** của index
+- Với index **DESC**: các NULL entries nằm ở **cuối** của index
 
-### NULL va Index Seek
+### NULL và Index Seek
 
 ```sql
 CREATE TABLE Products (
@@ -368,172 +368,172 @@ ON Products(DiscontinuedDate);
 ```
 
 ```sql
--- CA HAI query deu CO THE su dung Index Seek:
+-- CẢ HAI query đều CÓ THỂ sử dụng Index Seek:
 SELECT * FROM Products WHERE DiscontinuedDate IS NULL;
--- → Index Seek tren phan dau cua index (vi NULL nam dau voi ASC)
+-- → Index Seek trên phần đầu của index (vì NULL nằm đầu với ASC)
 
 SELECT * FROM Products WHERE DiscontinuedDate IS NOT NULL;
--- → Index Seek (range scan phan khong NULL)
+-- → Index Seek (range scan phần không NULL)
 
 SELECT * FROM Products WHERE DiscontinuedDate = '2024-06-15';
--- → Index Seek binh thuong
+-- → Index Seek bình thường
 ```
 
-### Filtered Index toi uu cho Nullable columns
+### Filtered Index tối ưu cho Nullable columns
 
-Neu phan lon rows co gia tri NULL va query thuong chi quan tam non-null:
+Nếu phần lớn rows có giá trị NULL và query thường chỉ quan tâm non-null:
 
 ```sql
--- Index day du: 1 trieu rows, 900k NULL, 100k co gia tri
+-- Index đầy đủ: 1 triệu rows, 900k NULL, 100k có giá trị
 CREATE INDEX IX_Products_DiscontinuedDate
 ON Products(DiscontinuedDate);
--- Kich thuoc: lon, chua ca 900k NULL entries khong can thiet
+-- Kích thước: lớn, chứa cả 900k NULL entries không cần thiết
 
--- Filtered Index: chi 100k rows
+-- Filtered Index: chỉ 100k rows
 CREATE INDEX IX_Products_DiscontinuedDate_NotNull
 ON Products(DiscontinuedDate)
 WHERE DiscontinuedDate IS NOT NULL;
--- Kich thuoc: nho hon 10x, nhanh hon maintain
+-- Kích thước: nhỏ hơn 10x, nhanh hơn maintain
 ```
 
-### Unique Index va NULL - Dac biet quan trong
+### Unique Index và NULL - Đặc biệt quan trọng
 
 ```sql
--- Unique Index chi cho phep TOI DA 1 NULL
+-- Unique Index chỉ cho phép TỐI ĐA 1 NULL
 CREATE UNIQUE INDEX UX_Employees_SSN
 ON Employees(SSN);
 
 INSERT INTO Employees (SSN) VALUES (NULL);  -- OK
-INSERT INTO Employees (SSN) VALUES (NULL);  -- LOI! Duplicate key
+INSERT INTO Employees (SSN) VALUES (NULL);  -- LỖI! Duplicate key
 ```
 
-SQL Server coi **NULL = NULL** trong ngur canh Unique Index (khac voi phep so sanh thong thuong noi NULL = NULL tra ve UNKNOWN).
+SQL Server coi **NULL = NULL** trong ngữ cảnh Unique Index (khác với phép so sánh thông thường nơi NULL = NULL trả về UNKNOWN).
 
-**Giai phap: Filtered Unique Index**
+**Giải pháp: Filtered Unique Index**
 
 ```sql
--- Cho phep nhieu NULLs, nhung dam bao unique cho cac gia tri non-null
+-- Cho phép nhiều NULLs, nhưng đảm bảo unique cho các giá trị non-null
 CREATE UNIQUE INDEX UX_Employees_SSN
 ON Employees(SSN)
 WHERE SSN IS NOT NULL;
 
 INSERT INTO Employees (SSN) VALUES (NULL);           -- OK
-INSERT INTO Employees (SSN) VALUES (NULL);           -- OK (khong bi kiem tra)
+INSERT INTO Employees (SSN) VALUES (NULL);           -- OK (không bị kiểm tra)
 INSERT INTO Employees (SSN) VALUES ('123-45-6789');  -- OK
-INSERT INTO Employees (SSN) VALUES ('123-45-6789');  -- LOI! Duplicate
+INSERT INTO Employees (SSN) VALUES ('123-45-6789');  -- LỖI! Duplicate
 ```
 
-### ANSI_NULLS va anh huong den queries
+### ANSI_NULLS và ảnh hưởng đến queries
 
 ```sql
-SET ANSI_NULLS ON; -- Mac dinh, tuan thu chuan SQL
--- WHERE Column = NULL  → khong tra ve gi (sai)
--- WHERE Column IS NULL → dung
+SET ANSI_NULLS ON; -- Mặc định, tuân thủ chuẩn SQL
+-- WHERE Column = NULL  → không trả về gì (sai)
+-- WHERE Column IS NULL → đúng
 
-SET ANSI_NULLS OFF; -- Khong khuyen khich, se bi loai bo trong tuong lai
--- WHERE Column = NULL  → hoat dong (nhung khong nen dung)
+SET ANSI_NULLS OFF; -- Không khuyến khích, sẽ bị loại bỏ trong tương lai
+-- WHERE Column = NULL  → hoạt động (nhưng không nên dùng)
 ```
 
 ### Best Practices
 
-| Tinh huong | Khuyen nghi |
+| Tình huống | Khuyến nghị |
 |---|---|
-| Column phan lon NULL, query filter IS NOT NULL | **Filtered Index WHERE col IS NOT NULL** |
-| Can unique nhung cho phep nhieu NULLs | **Filtered Unique Index WHERE col IS NOT NULL** |
-| Column it NULL, query ca NULL lan non-null | **Index binh thuong** |
-| Column trong composite index co the NULL | **Dat nullable column sau** trong index key |
+| Column phần lớn NULL, query filter IS NOT NULL | **Filtered Index WHERE col IS NOT NULL** |
+| Cần unique nhưng cho phép nhiều NULLs | **Filtered Unique Index WHERE col IS NOT NULL** |
+| Column ít NULL, query cả NULL lẫn non-null | **Index bình thường** |
+| Column trong composite index có thể NULL | **Đặt nullable column sau** trong index key |
 
 ---
 
-## Cau 5: WHERE cham thi danh index - SELECT nhanh hon dung khong?
+## Câu 5: WHERE chậm thì đánh index - SELECT nhanh hơn đúng không?
 
-### Cau tra loi: KHONG PHAI LUC NAO CUNG DUNG
+### Câu trả lời: KHÔNG PHẢI LÚC NÀO CŨNG ĐÚNG
 
-Day la **misconception pho bien nhat** ve indexing. Danh index khong phai "vien dan bac" -- co nhieu truong hop index ton tai nhung **hoan toan vo dung**.
+Đây là **misconception phổ biến nhất** về indexing. Đánh index không phải "viên đạn bạc" -- có nhiều trường hợp index tồn tại nhưng **hoàn toàn vô dụng**.
 
 ### 1. Non-SARGable Queries (Search ARGument-able)
 
-**SARGable** la kha nang SQL Server dung index de tim kiem. Cac truong hop **KHONG SARGable**:
+**SARGable** là khả năng SQL Server dùng index để tìm kiếm. Các trường hợp **KHÔNG SARGable**:
 
-#### a) Function tren column
+#### a) Function trên column
 
 ```sql
--- KHONG dung index (scan toan bo)
+-- KHÔNG dùng index (scan toàn bộ)
 SELECT * FROM Orders
 WHERE YEAR(OrderDate) = 2024;
--- SQL Server phai tinh YEAR() cho TUNG ROW de so sanh
+-- SQL Server phải tính YEAR() cho TỪNG ROW để so sánh
 
--- FIX: viet lai thanh range query
+-- FIX: viết lại thành range query
 SELECT * FROM Orders
 WHERE OrderDate >= '2024-01-01' AND OrderDate < '2025-01-01';
--- Index Seek tren OrderDate
+-- Index Seek trên OrderDate
 
--- Tuong tu:
-WHERE UPPER(Name) = 'NGUYEN VAN A'     -- KHONG SARGable
-WHERE Name = 'Nguyen Van A'             -- SARGable (dung collation)
+-- Tương tự:
+WHERE UPPER(Name) = 'NGUYEN VAN A'     -- KHÔNG SARGable
+WHERE Name = 'Nguyen Van A'             -- SARGable (dùng collation)
 
-WHERE DATEDIFF(DAY, CreateDate, GETDATE()) < 30  -- KHONG
+WHERE DATEDIFF(DAY, CreateDate, GETDATE()) < 30  -- KHÔNG
 WHERE CreateDate > DATEADD(DAY, -30, GETDATE())  -- SARGable
 ```
 
-#### b) LIKE voi wildcard o dau
+#### b) LIKE với wildcard ở đầu
 
 ```sql
-WHERE Name LIKE '%abc'     -- Full scan, KHONG dung index
-WHERE Name LIKE '%abc%'    -- Full scan, KHONG dung index
+WHERE Name LIKE '%abc'     -- Full scan, KHÔNG dùng index
+WHERE Name LIKE '%abc%'    -- Full scan, KHÔNG dùng index
 WHERE Name LIKE 'abc%'     -- Index Seek (SARGable)
 ```
 
-#### c) Implicit Conversion (chuyen doi ngam dinh)
+#### c) Implicit Conversion (chuyển đổi ngầm định)
 
 ```sql
--- Column la VARCHAR, nhung so sanh voi INT
--- PhoneNumber VARCHAR(20), co index
+-- Column là VARCHAR, nhưng so sánh với INT
+-- PhoneNumber VARCHAR(20), có index
 SELECT * FROM Customers
 WHERE PhoneNumber = 0912345678;
--- SQL Server phai CONVERT toan bo PhoneNumber sang INT de so sanh → SCAN
+-- SQL Server phải CONVERT toàn bộ PhoneNumber sang INT để so sánh → SCAN
 
--- FIX: truyen dung kieu du lieu
+-- FIX: truyền đúng kiểu dữ liệu
 SELECT * FROM Customers
 WHERE PhoneNumber = '0912345678';
 -- Index Seek
 ```
 
-**Quy tac Data Type Precedence**: SQL Server convert kieu co do uu tien thap sang kieu co do uu tien cao. VARCHAR < INT, nen VARCHAR bi convert → scan toan bo column.
+**Quy tắc Data Type Precedence**: SQL Server convert kiểu có độ ưu tiên thấp sang kiểu có độ ưu tiên cao. VARCHAR < INT, nên VARCHAR bị convert → scan toàn bộ column.
 
-#### d) Phep phu dinh
+#### d) Phép phủ định
 
 ```sql
-WHERE Status != 'Active'       -- Thuong scan (tra ve nhieu rows)
-WHERE Status NOT IN ('A','B')   -- Thuong scan
-WHERE NOT EXISTS (...)          -- Tuy truong hop
+WHERE Status != 'Active'       -- Thường scan (trả về nhiều rows)
+WHERE Status NOT IN ('A','B')   -- Thường scan
+WHERE NOT EXISTS (...)          -- Tùy trường hợp
 ```
 
 #### e) OR conditions
 
 ```sql
--- Co the khong dung index hieu qua
+-- Có thể không dùng index hiệu quả
 SELECT * FROM Orders
 WHERE CustomerId = 123 OR ProductId = 456;
 
--- FIX: dung UNION
+-- FIX: dùng UNION
 SELECT * FROM Orders WHERE CustomerId = 123
 UNION ALL
 SELECT * FROM Orders WHERE ProductId = 456;
--- Moi query dung duoc index rieng
+-- Mỗi query dùng được index riêng
 ```
 
-### 2. Selectivity thap - Optimizer chon Scan
+### 2. Selectivity thấp - Optimizer chọn Scan
 
 ```sql
--- Index ton tai tren Status, nhung chi co 3 gia tri phan biet
--- Status = 'Active' tra ve 80% rows
+-- Index tồn tại trên Status, nhưng chỉ có 3 giá trị phân biệt
+-- Status = 'Active' trả về 80% rows
 SELECT * FROM Orders WHERE Status = 'Active';
 -- Optimizer: "Index Seek 800k rows + 800k Key Lookups > Table Scan"
--- → Chon Table Scan (dung)
+-- → Chọn Table Scan (đúng)
 ```
 
-### 3. Key Lookup qua dat
+### 3. Key Lookup quá đắt
 
 ```sql
 CREATE INDEX IX_Orders_CustomerId ON Orders(CustomerId);
@@ -541,14 +541,14 @@ CREATE INDEX IX_Orders_CustomerId ON Orders(CustomerId);
 SELECT CustomerId, OrderDate, TotalAmount, ShipAddress, Notes
 FROM Orders
 WHERE CustomerId = 123;
--- Tim duoc 500 rows qua index → 500 Key Lookups ve Clustered Index
--- Moi Key Lookup la 1 random I/O → cham
+-- Tìm được 500 rows qua index → 500 Key Lookups về Clustered Index
+-- Mỗi Key Lookup là 1 random I/O → chậm
 
 -- FIX: Covering Index
 CREATE INDEX IX_Orders_CustomerId
 ON Orders(CustomerId)
 INCLUDE (OrderDate, TotalAmount, ShipAddress, Notes);
--- 0 Key Lookups → nhanh hon nhieu
+-- 0 Key Lookups → nhanh hơn nhiều
 ```
 
 ### 4. Parameter Sniffing
@@ -558,60 +558,60 @@ CREATE PROCEDURE GetOrders @Status VARCHAR(20)
 AS
     SELECT * FROM Orders WHERE Status = @Status;
 
--- Lan dau goi voi 'Cancelled' (1% rows) → plan dung Index Seek
+-- Lần đầu gọi với 'Cancelled' (1% rows) → plan dùng Index Seek
 EXEC GetOrders 'Cancelled';
 
--- Lan sau goi voi 'Active' (80% rows) → REUSE plan cu → Index Seek + 800k Key Lookups
+-- Lần sau gọi với 'Active' (80% rows) → REUSE plan cũ → Index Seek + 800k Key Lookups
 EXEC GetOrders 'Active';
--- Cuc ky cham! Plan khong phu hop voi gia tri nay
+-- Cực kỳ chậm! Plan không phù hợp với giá trị này
 ```
 
-### 5. Qua nhieu Indexes → Write cham
+### 5. Quá nhiều Indexes → Write chậm
 
 ```sql
--- Bang Orders co 15 indexes
+-- Bảng Orders có 15 indexes
 INSERT INTO Orders (...) VALUES (...);
--- SQL Server phai ghi vao: 1 Clustered Index + 15 Non-Clustered Indexes = 16 write operations
+-- SQL Server phải ghi vào: 1 Clustered Index + 15 Non-Clustered Indexes = 16 write operations
 
--- Moi UPDATE tren column nam trong index phai update ca index
+-- Mỗi UPDATE trên column nằm trong index phải update cả index
 UPDATE Orders SET Status = 'Shipped' WHERE OrderId = 123;
--- Neu Status nam trong 5 indexes → 5 index updates
+-- Nếu Status nằm trong 5 indexes → 5 index updates
 ```
 
-### Ket luan: Luon xem Execution Plan
+### Kết luận: Luôn xem Execution Plan
 
 ```sql
--- Bat Actual Execution Plan truoc va sau khi danh index
+-- Bật Actual Execution Plan trước và sau khi đánh index
 SET STATISTICS IO ON;
 SET STATISTICS TIME ON;
 
 -- Xem Execution Plan
--- Kiem tra: Scan vs Seek, Key Lookup co khong, Estimated vs Actual rows
--- So sanh logical reads truoc/sau
+-- Kiểm tra: Scan vs Seek, Key Lookup có không, Estimated vs Actual rows
+-- So sánh logical reads trước/sau
 ```
 
-**Quy trinh dung:**
-1. Xac dinh query cham (qua monitoring hoac pg_stat_statements tuong duong la Query Store trong SQL Server)
-2. Xem **Execution Plan** hien tai
-3. Phan tich **WHERE, JOIN, ORDER BY** dang dung columns nao
-4. Kiem tra query co **SARGable** khong -- fix query truoc
-5. Tao index phu hop (composite, covering, filtered)
-6. So sanh Execution Plan moi -- xac nhan cai thien
-7. Monitor **write performance** de dam bao khong bi anh huong qua nhieu
+**Quy trình đúng:**
+1. Xác định query chậm (qua monitoring hoặc Query Store trong SQL Server)
+2. Xem **Execution Plan** hiện tại
+3. Phân tích **WHERE, JOIN, ORDER BY** đang dùng columns nào
+4. Kiểm tra query có **SARGable** không -- fix query trước
+5. Tạo index phù hợp (composite, covering, filtered)
+6. So sánh Execution Plan mới -- xác nhận cải thiện
+7. Monitor **write performance** để đảm bảo không bị ảnh hưởng quá nhiều
 
 ---
 
-## Cau 6: Cau lenh SELECT va thu tu xu ly logic
+## Câu 6: Câu lệnh SELECT và thứ tự xử lý logic
 
-### Thu tu VIET vs Thu tu XU LY LOGIC
+### Thứ tự VIẾT vs Thứ tự XỬ LÝ LOGIC
 
-Day la **mot trong nhung kien thuc nen tang quan trong nhat** cua SQL. Thu tu viet va thu tu xu ly **hoan toan khac nhau**:
+Đây là **một trong những kiến thức nền tảng quan trọng nhất** của SQL. Thứ tự viết và thứ tự xử lý **hoàn toàn khác nhau**:
 
 ```
-THU TU VIET (Syntax)          THU TU XU LY LOGIC (Execution)
+THỨ TỰ VIẾT (Syntax)          THỨ TỰ XỬ LÝ LOGIC (Execution)
 ─────────────────              ─────────────────────────────
 SELECT          (5)    ←──    1. FROM + JOINs
-DISTINCT        (6)    ←──    2. ON (dieu kien JOIN)
+DISTINCT        (6)    ←──    2. ON (điều kiện JOIN)
 TOP             (8)    ←──    3. WHERE
   columns...           ←──    4. GROUP BY
 FROM            (1)    ←──    5. HAVING
@@ -624,21 +624,21 @@ ORDER BY        (7)
 OFFSET-FETCH    (8)
 ```
 
-### Chi tiet tung buoc
+### Chi tiết từng bước
 
-| Buoc | Menh de | Chuc nang |
+| Bước | Mệnh đề | Chức năng |
 |------|---------|-----------|
-| 1 | **FROM + JOINs** | Xac dinh nguon du lieu, thuc hien phep JOIN tao Virtual Table |
-| 2 | **ON** | Ap dung dieu kien JOIN, loc cac rows match |
-| 3 | **WHERE** | Loc rows theo dieu kien (truoc khi group) |
-| 4 | **GROUP BY** | Nhom cac rows co cung gia tri thanh cac groups |
-| 5 | **HAVING** | Loc groups theo dieu kien aggregate |
-| 6 | **SELECT** | Chon columns, tinh toan expressions, alias |
-| 7 | **DISTINCT** | Loai bo cac rows trung lap |
-| 8 | **ORDER BY** | Sap xep ket qua |
-| 9 | **TOP / OFFSET-FETCH** | Gioi han so luong rows tra ve |
+| 1 | **FROM + JOINs** | Xác định nguồn dữ liệu, thực hiện phép JOIN tạo Virtual Table |
+| 2 | **ON** | Áp dụng điều kiện JOIN, lọc các rows match |
+| 3 | **WHERE** | Lọc rows theo điều kiện (trước khi group) |
+| 4 | **GROUP BY** | Nhóm các rows có cùng giá trị thành các groups |
+| 5 | **HAVING** | Lọc groups theo điều kiện aggregate |
+| 6 | **SELECT** | Chọn columns, tính toán expressions, alias |
+| 7 | **DISTINCT** | Loại bỏ các rows trùng lặp |
+| 8 | **ORDER BY** | Sắp xếp kết quả |
+| 9 | **TOP / OFFSET-FETCH** | Giới hạn số lượng rows trả về |
 
-### Vi du thuc te: Bao cao doanh thu theo khach hang
+### Ví dụ thực tế: Báo cáo doanh thu theo khách hàng
 
 ```sql
 SELECT DISTINCT TOP 10
@@ -656,78 +656,78 @@ ORDER BY Revenue DESC                        -- (8) ORDER BY
 -- TOP 10                                    -- (9) TOP
 ```
 
-**Walk-through tung buoc:**
+**Walk-through từng bước:**
 
-**Buoc 1 - FROM + JOIN:** Ket hop bang `Customers` voi `Orders` qua `CustomerId`. Tao virtual table chua tat ca cac cap (customer, order) match.
+**Bước 1 - FROM + JOIN:** Kết hợp bảng `Customers` với `Orders` qua `CustomerId`. Tạo virtual table chứa tất cả các cặp (customer, order) match.
 
-**Buoc 2 - ON:** Chi giu cac rows co `c.CustomerId = o.CustomerId`.
+**Bước 2 - ON:** Chỉ giữ các rows có `c.CustomerId = o.CustomerId`.
 
-**Buoc 3 - WHERE:** Loc chi nhung orders tu 2024 tro di va co Status = 'Completed'. Rows khong thoa bi loai.
+**Bước 3 - WHERE:** Lọc chỉ những orders từ 2024 trở đi và có Status = 'Completed'. Rows không thỏa bị loại.
 
-**Buoc 4 - GROUP BY:** Nhom cac rows con lai theo `c.CustomerName`. Moi group la mot khach hang voi tat ca orders cua ho.
+**Bước 4 - GROUP BY:** Nhóm các rows còn lại theo `c.CustomerName`. Mỗi group là một khách hàng với tất cả orders của họ.
 
-**Buoc 5 - HAVING:** Chi giu nhung groups co `SUM(TotalAmount) > 1,000,000`. Khach hang doanh thu thap bi loai.
+**Bước 5 - HAVING:** Chỉ giữ những groups có `SUM(TotalAmount) > 1,000,000`. Khách hàng doanh thu thấp bị loại.
 
-**Buoc 6 - SELECT:** Tinh `COUNT(o.OrderId)`, `SUM(o.TotalAmount)`, lay `c.CustomerName`. Dat alias `TotalOrders`, `Revenue`.
+**Bước 6 - SELECT:** Tính `COUNT(o.OrderId)`, `SUM(o.TotalAmount)`, lấy `c.CustomerName`. Đặt alias `TotalOrders`, `Revenue`.
 
-**Buoc 7 - DISTINCT:** Loai bo cac rows trung lap (neu co).
+**Bước 7 - DISTINCT:** Loại bỏ các rows trùng lặp (nếu có).
 
-**Buoc 8 - ORDER BY:** Sap xep theo `Revenue DESC`. Luu y: ORDER BY co the dung alias vi SELECT da chay truoc.
+**Bước 8 - ORDER BY:** Sắp xếp theo `Revenue DESC`. Lưu ý: ORDER BY có thể dùng alias vì SELECT đã chạy trước.
 
-**Buoc 9 - TOP 10:** Lay 10 rows dau tien sau khi sap xep.
+**Bước 9 - TOP 10:** Lấy 10 rows đầu tiên sau khi sắp xếp.
 
-### Tai sao thu tu nay quan trong?
+### Tại sao thứ tự này quan trọng?
 
-**Cau hoi thuong gap trong interview:**
+**Câu hỏi thường gặp trong interview:**
 
 ```sql
--- Tai sao query nay LOI?
+-- Tại sao query này LỖI?
 SELECT FullName, YEAR(OrderDate) AS OrderYear
 FROM Orders
 WHERE OrderYear = 2024;
--- Loi: "Invalid column name 'OrderYear'"
--- Vi WHERE (buoc 3) chay TRUOC SELECT (buoc 6)
--- Alias 'OrderYear' chua ton tai khi WHERE thuc thi
+-- Lỗi: "Invalid column name 'OrderYear'"
+-- Vì WHERE (bước 3) chạy TRƯỚC SELECT (bước 6)
+-- Alias 'OrderYear' chưa tồn tại khi WHERE thực thi
 
 -- FIX:
 SELECT FullName, YEAR(OrderDate) AS OrderYear
 FROM Orders
 WHERE YEAR(OrderDate) = 2024;
 
--- Hoac tot hon (SARGable):
+-- Hoặc tốt hơn (SARGable):
 SELECT FullName, YEAR(OrderDate) AS OrderYear
 FROM Orders
 WHERE OrderDate >= '2024-01-01' AND OrderDate < '2025-01-01';
 ```
 
 ```sql
--- Tai sao ORDER BY co the dung alias nhung WHERE thi khong?
+-- Tại sao ORDER BY có thể dùng alias nhưng WHERE thì không?
 SELECT FullName, SUM(Amount) AS TotalAmount
 FROM Orders
 GROUP BY FullName
-ORDER BY TotalAmount DESC;  -- OK! ORDER BY (buoc 8) chay SAU SELECT (buoc 6)
+ORDER BY TotalAmount DESC;  -- OK! ORDER BY (bước 8) chạy SAU SELECT (bước 6)
 ```
 
 ```sql
--- Tai sao HAVING dung duoc aggregate nhung WHERE thi khong?
--- WHERE (buoc 3) chay TRUOC GROUP BY (buoc 4) → chua co groups de aggregate
--- HAVING (buoc 5) chay SAU GROUP BY (buoc 4) → da co groups
+-- Tại sao HAVING dùng được aggregate nhưng WHERE thì không?
+-- WHERE (bước 3) chạy TRƯỚC GROUP BY (bước 4) → chưa có groups để aggregate
+-- HAVING (bước 5) chạy SAU GROUP BY (bước 4) → đã có groups
 SELECT DepartmentId, AVG(Salary)
 FROM Employees
-WHERE AVG(Salary) > 5000  -- LOI! Chua co groups
+WHERE AVG(Salary) > 5000  -- LỖI! Chưa có groups
 GROUP BY DepartmentId;
 
 SELECT DepartmentId, AVG(Salary)
 FROM Employees
 GROUP BY DepartmentId
-HAVING AVG(Salary) > 5000;  -- OK! Da group xong
+HAVING AVG(Salary) > 5000;  -- OK! Đã group xong
 ```
 
 ---
 
-## Cau 7: Co bao nhieu kieu JOIN?
+## Câu 7: Có bao nhiêu kiểu JOIN?
 
-SQL Server ho tro **6 kieu JOIN** chinh:
+SQL Server hỗ trợ **6 kiểu JOIN** chính:
 
 ### 1. INNER JOIN
 
@@ -735,19 +735,19 @@ SQL Server ho tro **6 kieu JOIN** chinh:
 Customers         Orders            Result (INNER JOIN)
 ┌────┬───────┐   ┌────┬──────┐     ┌───────┬──────┐
 │ 1  │ An    │   │ 1  │ 100$ │     │ An    │ 100$ │
-│ 2  │ Binh  │   │ 1  │ 200$ │     │ An    │ 200$ │
-│ 3  │ Cuong │   │ 2  │ 150$ │     │ Binh  │ 150$ │
+│ 2  │ Bình  │   │ 1  │ 200$ │     │ An    │ 200$ │
+│ 3  │ Cường │   │ 2  │ 150$ │     │ Bình  │ 150$ │
 └────┴───────┘   │ 4  │ 300$ │     └───────┴──────┘
                   └────┴──────┘
--- Cuong (ID=3) khong co order → bi loai
--- Order cua CustomerId=4 khong co customer → bi loai
+-- Cường (ID=3) không có order → bị loại
+-- Order của CustomerId=4 không có customer → bị loại
 ```
 
 ```sql
 SELECT c.CustomerName, o.TotalAmount
 FROM Customers c
 INNER JOIN Orders o ON c.CustomerId = o.CustomerId;
--- Chi tra ve rows co match O CA HAI bang
+-- Chỉ trả về rows có match Ở CẢ HAI bảng
 ```
 
 ### 2. LEFT JOIN (LEFT OUTER JOIN)
@@ -756,21 +756,21 @@ INNER JOIN Orders o ON c.CustomerId = o.CustomerId;
 Customers         Orders            Result (LEFT JOIN)
 ┌────┬───────┐   ┌────┬──────┐     ┌───────┬──────┐
 │ 1  │ An    │   │ 1  │ 100$ │     │ An    │ 100$ │
-│ 2  │ Binh  │   │ 1  │ 200$ │     │ An    │ 200$ │
-│ 3  │ Cuong │   │ 2  │ 150$ │     │ Binh  │ 150$ │
-└────┴───────┘   │ 4  │ 300$ │     │ Cuong │ NULL │
+│ 2  │ Bình  │   │ 1  │ 200$ │     │ An    │ 200$ │
+│ 3  │ Cường │   │ 2  │ 150$ │     │ Bình  │ 150$ │
+└────┴───────┘   │ 4  │ 300$ │     │ Cường │ NULL │
                   └────┴──────┘     └───────┴──────┘
--- Cuong khong co order → van giu, Orders columns = NULL
--- Order CustomerId=4 khong co customer → bi loai (vi khong nam o LEFT)
+-- Cường không có order → vẫn giữ, Orders columns = NULL
+-- Order CustomerId=4 không có customer → bị loại (vì không nằm ở LEFT)
 ```
 
 ```sql
 SELECT c.CustomerName, o.TotalAmount
 FROM Customers c
 LEFT JOIN Orders o ON c.CustomerId = o.CustomerId;
--- Tat ca customers, ke ca nhung nguoi chua co order
+-- Tất cả customers, kể cả những người chưa có order
 
--- Tim customers CHUA co order:
+-- Tìm customers CHƯA có order:
 SELECT c.CustomerName
 FROM Customers c
 LEFT JOIN Orders o ON c.CustomerId = o.CustomerId
@@ -783,11 +783,11 @@ WHERE o.CustomerId IS NULL;
 SELECT c.CustomerName, o.TotalAmount
 FROM Customers c
 RIGHT JOIN Orders o ON c.CustomerId = o.CustomerId;
--- Tat ca orders, ke ca nhung orders khong co customer match
--- Tuong duong voi LEFT JOIN nhung dao 2 bang
+-- Tất cả orders, kể cả những orders không có customer match
+-- Tương đương với LEFT JOIN nhưng đảo 2 bảng
 ```
 
-Trong thuc te, **it khi dung RIGHT JOIN** -- thuong viet lai thanh LEFT JOIN cho de doc.
+Trong thực tế, **ít khi dùng RIGHT JOIN** -- thường viết lại thành LEFT JOIN cho dễ đọc.
 
 ### 4. FULL OUTER JOIN
 
@@ -795,29 +795,29 @@ Trong thuc te, **it khi dung RIGHT JOIN** -- thuong viet lai thanh LEFT JOIN cho
 Customers         Orders            Result (FULL OUTER JOIN)
 ┌────┬───────┐   ┌────┬──────┐     ┌───────┬──────┐
 │ 1  │ An    │   │ 1  │ 100$ │     │ An    │ 100$ │
-│ 2  │ Binh  │   │ 1  │ 200$ │     │ An    │ 200$ │
-│ 3  │ Cuong │   │ 2  │ 150$ │     │ Binh  │ 150$ │
-└────┴───────┘   │ 4  │ 300$ │     │ Cuong │ NULL │
+│ 2  │ Bình  │   │ 1  │ 200$ │     │ An    │ 200$ │
+│ 3  │ Cường │   │ 2  │ 150$ │     │ Bình  │ 150$ │
+└────┴───────┘   │ 4  │ 300$ │     │ Cường │ NULL │
                   └────┴──────┘     │ NULL  │ 300$ │
                                     └───────┴──────┘
--- Cuong khong co order → giu, order = NULL
--- Order CustomerId=4 khong co customer → giu, customer = NULL
+-- Cường không có order → giữ, order = NULL
+-- Order CustomerId=4 không có customer → giữ, customer = NULL
 ```
 
 ```sql
 SELECT c.CustomerName, o.TotalAmount
 FROM Customers c
 FULL OUTER JOIN Orders o ON c.CustomerId = o.CustomerId;
--- Tat ca rows tu CA HAI bang, NULL cho phia khong match
+-- Tất cả rows từ CẢ HAI bảng, NULL cho phía không match
 
--- Use case: doi chieu du lieu giua 2 he thong
+-- Use case: đối chiếu dữ liệu giữa 2 hệ thống
 SELECT
     COALESCE(a.Id, b.Id) AS Id,
     a.Amount AS SystemA_Amount,
     b.Amount AS SystemB_Amount
 FROM SystemA a
 FULL OUTER JOIN SystemB b ON a.Id = b.Id
-WHERE a.Id IS NULL OR b.Id IS NULL;  -- Tim records chi co 1 phia
+WHERE a.Id IS NULL OR b.Id IS NULL;  -- Tìm records chỉ có ở 1 phía
 ```
 
 ### 5. CROSS JOIN
@@ -839,140 +839,140 @@ Colors           Sizes             Result (CROSS JOIN)
 ```
 
 ```sql
--- Tich Descartes: moi row bang A ket hop voi MOI row bang B
+-- Tích Descartes: mỗi row bảng A kết hợp với MỌI row bảng B
 SELECT c.Color, s.Size
 FROM Colors c
 CROSS JOIN Sizes s;
 
--- Use case: tao lich
+-- Use case: tạo lịch
 SELECT d.Date, s.ShiftName
 FROM Calendar d
 CROSS JOIN Shifts s
 WHERE d.Date BETWEEN '2024-01-01' AND '2024-12-31';
 
--- CANH BAO: 10,000 rows x 10,000 rows = 100 TRIEU rows!
+-- CẢNH BÁO: 10,000 rows x 10,000 rows = 100 TRIỆU rows!
 ```
 
 ### 6. SELF JOIN
 
 ```sql
--- Bang Employees co cot ManagerId tro ve chinh bang do
+-- Bảng Employees có cột ManagerId trỏ về chính bảng đó
 CREATE TABLE Employees (
     EmployeeId INT PRIMARY KEY,
     FullName NVARCHAR(200),
     ManagerId INT REFERENCES Employees(EmployeeId)
 );
 
--- Tim nhan vien va ten manager cua ho
+-- Tìm nhân viên và tên manager của họ
 SELECT
     e.FullName AS Employee,
     m.FullName AS Manager
 FROM Employees e
 LEFT JOIN Employees m ON e.ManagerId = m.EmployeeId;
 
--- CEO/Director khong co manager → ManagerId = NULL → LEFT JOIN giu lai
+-- CEO/Director không có manager → ManagerId = NULL → LEFT JOIN giữ lại
 ```
 
 ### Performance Tips
 
 ```sql
--- 1. INNER JOIN nhanh nhat (loai nhieu rows nhat)
--- Thu tu uu tien: INNER > LEFT/RIGHT > FULL > CROSS
+-- 1. INNER JOIN nhanh nhất (loại nhiều rows nhất)
+-- Thứ tự ưu tiên: INNER > LEFT/RIGHT > FULL > CROSS
 
--- 2. Dam bao co index tren JOIN columns
+-- 2. Đảm bảo có index trên JOIN columns
 CREATE INDEX IX_Orders_CustomerId ON Orders(CustomerId);
--- LEFT JOIN Customers c → Orders o: index tren o.CustomerId rat quan trong
+-- LEFT JOIN Customers c → Orders o: index trên o.CustomerId rất quan trọng
 
--- 3. Tranh Implicit Conversion trong JOIN
--- BAD: CustomerId la INT o bang A nhung VARCHAR o bang B
+-- 3. Tránh Implicit Conversion trong JOIN
+-- BAD: CustomerId là INT ở bảng A nhưng VARCHAR ở bảng B
 FROM TableA a JOIN TableB b ON a.CustomerId = b.CustomerId
--- Neu khac data type → convert toan bo 1 phia → khong dung index
+-- Nếu khác data type → convert toàn bộ 1 phía → không dùng index
 
--- 4. SQL Server Optimizer tu chon JOIN algorithm:
--- Nested Loop: tot cho bang nho INNER + bang lon co index OUTER
--- Merge Join: tot khi ca 2 input da sorted (VD: 2 clustered index)
--- Hash Join: tot khi khong co index, bang lon, khong sort
--- Thuong khong can dung JOIN hints, de optimizer tu quyet dinh
+-- 4. SQL Server Optimizer tự chọn JOIN algorithm:
+-- Nested Loop: tốt cho bảng nhỏ INNER + bảng lớn có index OUTER
+-- Merge Join: tốt khi cả 2 input đã sorted (VD: 2 clustered index)
+-- Hash Join: tốt khi không có index, bảng lớn, không sort
+-- Thường không cần dùng JOIN hints, để optimizer tự quyết định
 ```
 
 ---
 
-## Cau 8: WHERE vs HAVING?
+## Câu 8: WHERE vs HAVING?
 
-### Su khac biet cot loi
+### Sự khác biệt cốt lõi
 
-| Dac diem | WHERE | HAVING |
+| Đặc điểm | WHERE | HAVING |
 |----------|-------|--------|
-| Thoi diem thuc thi | **Truoc GROUP BY** (buoc 3) | **Sau GROUP BY** (buoc 5) |
-| Loc | **Tung row** rieng le | **Tung group** |
-| Aggregate functions | **KHONG** dung duoc | **CO** dung duoc |
-| Hieu suat | **Tot hon** (giam du lieu som) | Phai xu ly nhieu du lieu hon |
+| Thời điểm thực thi | **Trước GROUP BY** (bước 3) | **Sau GROUP BY** (bước 5) |
+| Lọc | **Từng row** riêng lẻ | **Từng group** |
+| Aggregate functions | **KHÔNG** dùng được | **CÓ** dùng được |
+| Hiệu suất | **Tốt hơn** (giảm dữ liệu sớm) | Phải xử lý nhiều dữ liệu hơn |
 
-### Vi du minh hoa
+### Ví dụ minh họa
 
 ```sql
--- Bai toan: Tim phong ban co hon 10 nhan vien dang Active
+-- Bài toán: Tìm phòng ban có hơn 10 nhân viên đang Active
 
--- CACH SAI: filter trong HAVING (cham)
+-- CÁCH SAI: filter trong HAVING (chậm)
 SELECT DepartmentId, COUNT(*) AS EmpCount
 FROM Employees
 GROUP BY DepartmentId
 HAVING COUNT(*) > 10 AND DepartmentId != 5;
--- Buoc 3 (WHERE): khong co → xu ly TAT CA rows (ke ca Dept 5)
--- Buoc 4 (GROUP BY): nhom tat ca rows, ke ca Dept 5
--- Buoc 5 (HAVING): loai Dept 5 va groups <= 10
--- → Lang phi: da group Dept 5 roi moi loai
+-- Bước 3 (WHERE): không có → xử lý TẤT CẢ rows (kể cả Dept 5)
+-- Bước 4 (GROUP BY): nhóm tất cả rows, kể cả Dept 5
+-- Bước 5 (HAVING): loại Dept 5 và groups <= 10
+-- → Lãng phí: đã group Dept 5 rồi mới loại
 
--- CACH DUNG: filter trong WHERE (nhanh)
+-- CÁCH ĐÚNG: filter trong WHERE (nhanh)
 SELECT DepartmentId, COUNT(*) AS EmpCount
 FROM Employees
-WHERE DepartmentId != 5        -- Loai Dept 5 TRUOC khi group
+WHERE DepartmentId != 5        -- Loại Dept 5 TRƯỚC khi group
 GROUP BY DepartmentId
 HAVING COUNT(*) > 10;
--- Buoc 3 (WHERE): loai tat ca rows Dept 5 → it rows hon
--- Buoc 4 (GROUP BY): nhom it rows hon → nhanh hon
--- Buoc 5 (HAVING): chi kiem tra aggregate condition
+-- Bước 3 (WHERE): loại tất cả rows Dept 5 → ít rows hơn
+-- Bước 4 (GROUP BY): nhóm ít rows hơn → nhanh hơn
+-- Bước 5 (HAVING): chỉ kiểm tra aggregate condition
 ```
 
-### Quy tac vang
+### Quy tắc vàng
 
-> **Neu dieu kien KHONG can aggregate function → dung WHERE.**
-> **Neu dieu kien CAN aggregate function (SUM, COUNT, AVG, MIN, MAX) → dung HAVING.**
+> **Nếu điều kiện KHÔNG cần aggregate function → dùng WHERE.**
+> **Nếu điều kiện CẦN aggregate function (SUM, COUNT, AVG, MIN, MAX) → dùng HAVING.**
 
 ```sql
--- WHERE: loc tren column values cua tung row
+-- WHERE: lọc trên column values của từng row
 WHERE Status = 'Active'
 WHERE OrderDate >= '2024-01-01'
 WHERE DepartmentId IN (1, 2, 3)
 
--- HAVING: loc tren ket qua aggregate cua group
+-- HAVING: lọc trên kết quả aggregate của group
 HAVING COUNT(*) > 10
 HAVING SUM(TotalAmount) > 1000000
 HAVING AVG(Salary) BETWEEN 5000 AND 10000
 ```
 
-### Truong hop dac biet: HAVING khong co GROUP BY
+### Trường hợp đặc biệt: HAVING không có GROUP BY
 
 ```sql
--- Treats toan bo result set nhu 1 group duy nhat
+-- Treats toàn bộ result set như 1 group duy nhất
 SELECT COUNT(*) AS TotalActive
 FROM Employees
 HAVING COUNT(*) > 100;
--- Neu co hon 100 employees → tra ve count
--- Neu khong → tra ve 0 rows (khong phai 0, ma la KHONG CO ROW nao)
+-- Nếu có hơn 100 employees → trả về count
+-- Nếu không → trả về 0 rows (không phải 0, mà là KHÔNG CÓ ROW nào)
 ```
 
-### So sanh performance thuc te
+### So sánh performance thực tế
 
 ```sql
--- Bang Orders: 10 trieu rows, 1 trieu rows co Status = 'Cancelled'
+-- Bảng Orders: 10 triệu rows, 1 triệu rows có Status = 'Cancelled'
 
--- Query 1: HAVING filter (cham)
+-- Query 1: HAVING filter (chậm)
 SELECT CustomerId, SUM(TotalAmount)
 FROM Orders
 GROUP BY CustomerId
 HAVING CustomerId != 999;
--- Xu ly: 10 trieu rows → GROUP BY → HAVING loai 1 customer
+-- Xử lý: 10 triệu rows → GROUP BY → HAVING loại 1 customer
 -- Logical reads: ~50,000 pages
 
 -- Query 2: WHERE filter (nhanh)
@@ -980,50 +980,50 @@ SELECT CustomerId, SUM(TotalAmount)
 FROM Orders
 WHERE CustomerId != 999
 GROUP BY CustomerId;
--- Xu ly: loai rows cua Customer 999 truoc → GROUP BY it rows hon
--- Logical reads: ~49,950 pages (tiet kiem I/O)
+-- Xử lý: loại rows của Customer 999 trước → GROUP BY ít rows hơn
+-- Logical reads: ~49,950 pages (tiết kiệm I/O)
 
--- Chenh lech tuy thuoc vao luong du lieu bi loc.
--- Cang nhieu rows bi loc boi WHERE → cang tiet kiem.
+-- Chênh lệch tùy thuộc vào lượng dữ liệu bị lọc.
+-- Càng nhiều rows bị lọc bởi WHERE → càng tiết kiệm.
 ```
 
 ---
 
-## Cau 9: UNION vs UNION ALL?
+## Câu 9: UNION vs UNION ALL?
 
-### Su khac biet chinh
+### Sự khác biệt chính
 
-| Dac diem | UNION | UNION ALL |
+| Đặc điểm | UNION | UNION ALL |
 |----------|-------|-----------|
-| Ket qua trung lap | **Loai bo** | **Giu tat ca** |
-| Internal operation | Sort + Distinct (hoac Hash Match) | Chi noi (Concatenation) |
-| Performance | **Cham hon** | **Nhanh hon** |
-| Do phuc tap | O(n log n) - phai sort/hash | O(n) - chi append |
+| Kết quả trùng lặp | **Loại bỏ** | **Giữ tất cả** |
+| Internal operation | Sort + Distinct (hoặc Hash Match) | Chỉ nối (Concatenation) |
+| Performance | **Chậm hơn** | **Nhanh hơn** |
+| Độ phức tạp | O(n log n) - phải sort/hash | O(n) - chỉ append |
 
-### Vi du minh hoa
+### Ví dụ minh họa
 
 ```sql
--- Du lieu:
+-- Dữ liệu:
 -- TableA: 1, 2, 3
 -- TableB: 2, 3, 4
 
 SELECT Id FROM TableA
 UNION
 SELECT Id FROM TableB;
--- Ket qua: 1, 2, 3, 4 (loai duplicate 2 va 3)
+-- Kết quả: 1, 2, 3, 4 (loại duplicate 2 và 3)
 
 SELECT Id FROM TableA
 UNION ALL
 SELECT Id FROM TableB;
--- Ket qua: 1, 2, 3, 2, 3, 4 (giu tat ca 6 rows)
+-- Kết quả: 1, 2, 3, 2, 3, 4 (giữ tất cả 6 rows)
 ```
 
-### Execution Plan so sanh
+### Execution Plan so sánh
 
 ```
 UNION:                              UNION ALL:
 ┌──────────┐                        ┌──────────────┐
-│ Sort     │  ← Chi phi cao         │ Concatenation │  ← Chi phi thap
+│ Sort     │  ← Chi phí cao         │ Concatenation │  ← Chi phí thấp
 │ Distinct │  O(n log n)            │              │  O(n)
 ├──────────┤                        ├──────────────┤
 │ Concat   │                        │ Table A      │
@@ -1033,72 +1033,72 @@ UNION:                              UNION ALL:
 └──────────┘
 ```
 
-UNION phai **doc toan bo du lieu, sort, va loai duplicates** -- voi du lieu lon, chi phi nay rat dang ke (tempdb spills, CPU).
+UNION phải **đọc toàn bộ dữ liệu, sort, và loại duplicates** -- với dữ liệu lớn, chi phí này rất đáng kể (tempdb spills, CPU).
 
-### Khi nao dung cai nao?
+### Khi nào dùng cái nào?
 
-**Dung UNION ALL khi:**
+**Dùng UNION ALL khi:**
 
 ```sql
--- 1. Biet chac khong co duplicate (moi query tu bang/partition khac nhau)
+-- 1. Biết chắc không có duplicate (mỗi query từ bảng/partition khác nhau)
 SELECT OrderId, Amount FROM Orders_2023
 UNION ALL
 SELECT OrderId, Amount FROM Orders_2024;
--- Moi partition co du lieu rieng biet → khong trung
+-- Mỗi partition có dữ liệu riêng biệt → không trùng
 
--- 2. Chap nhan duplicate (khong anh huong logic)
+-- 2. Chấp nhận duplicate (không ảnh hưởng logic)
 SELECT ProductId FROM RecentlyViewed
 UNION ALL
 SELECT ProductId FROM Recommendations;
--- Trung khong sao, chi can danh sach de hien thi
+-- Trùng không sao, chỉ cần danh sách để hiển thị
 
--- 3. Performance la uu tien
--- Du lieu lon, can ket qua nhanh
+-- 3. Performance là ưu tiên
+-- Dữ liệu lớn, cần kết quả nhanh
 ```
 
-**Dung UNION khi:**
+**Dùng UNION khi:**
 
 ```sql
--- Can dam bao unique (VD: bao cao tong hop khong trung)
+-- Cần đảm bảo unique (VD: báo cáo tổng hợp không trùng)
 SELECT Email FROM Newsletter_Subscribers
 UNION
 SELECT Email FROM Active_Customers;
--- Mot nguoi vua subscribe vua la customer → chi hien 1 lan
+-- Một người vừa subscribe vừa là customer → chỉ hiện 1 lần
 ```
 
-### Cac quy tac quan trong
+### Các quy tắc quan trọng
 
 ```sql
--- 1. SO LUONG COLUMNS phai bang nhau
+-- 1. SỐ LƯỢNG COLUMNS phải bằng nhau
 SELECT Id, Name FROM TableA
 UNION ALL
-SELECT Id FROM TableB;        -- LOI! Khac so columns
+SELECT Id FROM TableB;        -- LỖI! Khác số columns
 
--- 2. DATA TYPES phai tuong thich (compatible)
+-- 2. DATA TYPES phải tương thích (compatible)
 SELECT Id, Name FROM TableA         -- Id: INT, Name: VARCHAR
 UNION ALL
 SELECT Code, Description FROM TableB -- Code: INT, Description: VARCHAR
--- OK neu data types tuong thich. SQL Server se implicit convert neu can.
+-- OK nếu data types tương thích. SQL Server sẽ implicit convert nếu cần.
 
--- 3. Column names lay tu query DAU TIEN
+-- 3. Column names lấy từ query ĐẦU TIÊN
 SELECT Id AS MaKH, Name AS TenKH FROM TableA
 UNION ALL
 SELECT Code, Description FROM TableB;
--- Ket qua co columns: MaKH, TenKH (lay tu query dau)
+-- Kết quả có columns: MaKH, TenKH (lấy từ query đầu)
 
--- 4. ORDER BY chi dung duoc o CUOI CUNG
+-- 4. ORDER BY chỉ dùng được ở CUỐI CÙNG
 SELECT Id FROM TableA
 UNION ALL
 SELECT Id FROM TableB
-ORDER BY Id;    -- ORDER BY ap dung cho TOAN BO ket qua
+ORDER BY Id;    -- ORDER BY áp dụng cho TOÀN BỘ kết quả
 
--- Muon sort tung phan → dung subquery hoac CTE
+-- Muốn sort từng phần → dùng subquery hoặc CTE
 ```
 
-### Vi du thuc te: Combine du lieu tu nhieu nguon
+### Ví dụ thực tế: Combine dữ liệu từ nhiều nguồn
 
 ```sql
--- Bao cao tong hop doanh thu tu nhieu kenh ban hang
+-- Báo cáo tổng hợp doanh thu từ nhiều kênh bán hàng
 SELECT
     'Online' AS Channel,
     OrderDate,
@@ -1128,27 +1128,27 @@ WHERE InvoiceDate >= '2024-01-01'
 GROUP BY InvoiceDate
 
 ORDER BY OrderDate, Channel;
--- UNION ALL vi moi bang chua du lieu rieng biet, khong trung
--- Performance: chi Concatenation, khong Sort Distinct
+-- UNION ALL vì mỗi bảng chứa dữ liệu riêng biệt, không trùng
+-- Performance: chỉ Concatenation, không Sort Distinct
 ```
 
-### Meo nho
+### Mẹo nhớ
 
-| Cau hoi | Tra loi |
+| Câu hỏi | Trả lời |
 |---------|---------|
-| Mac dinh nen dung gi? | **UNION ALL** (nhanh hon, chi dung UNION khi that su can loai trung) |
-| Co bao nhieu UNION/UNION ALL? | Khong gioi han, nhung cang nhieu → cang cham |
-| Co the ket hop UNION va UNION ALL? | **Co** |
-| UNION co dung index khong? | Moi SELECT con co the dung index rieng, nhung Sort Distinct o ngoai thi khong |
+| Mặc định nên dùng gì? | **UNION ALL** (nhanh hơn, chỉ dùng UNION khi thật sự cần loại trùng) |
+| Có bao nhiêu UNION/UNION ALL? | Không giới hạn, nhưng càng nhiều → càng chậm |
+| Có thể kết hợp UNION và UNION ALL? | **Có** |
+| UNION có dùng index không? | Mỗi SELECT con có thể dùng index riêng, nhưng Sort Distinct ở ngoài thì không |
 
 ```sql
--- Ket hop ca UNION va UNION ALL
+-- Kết hợp cả UNION và UNION ALL
 SELECT Id FROM TableA
-UNION ALL          -- Giu duplicate giua A va B
+UNION ALL          -- Giữ duplicate giữa A và B
 SELECT Id FROM TableB
-UNION              -- Loai duplicate voi C
+UNION              -- Loại duplicate với C
 SELECT Id FROM TableC;
--- Luu y: thu tu uu tien co the gay nhap nham → dung parentheses neu can
+-- Lưu ý: thứ tự ưu tiên có thể gây nhầm lẫn → dùng parentheses nếu cần
 ```
 
 ---
@@ -2033,11 +2033,11 @@ END CATCH
 
 | Isolation Level | Dirty Read | Non-repeatable Read | Phantom Read | Locking |
 |---|:---:|:---:|:---:|---|
-| READ UNCOMMITTED | Co | Co | Co | Không shared lock |
-| READ COMMITTED (default) | Khong | Co | Co | Shared lock giữ trong lúc đọc |
-| REPEATABLE READ | Khong | Khong | Co | Shared lock giữ đến hết transaction |
-| SERIALIZABLE | Khong | Khong | Khong | Range locks |
-| SNAPSHOT | Khong | Khong | Khong | Row versioning (TempDB) |
+| READ UNCOMMITTED | Có | Có | Có | Không shared lock |
+| READ COMMITTED (default) | Không | Có | Có | Shared lock giữ trong lúc đọc |
+| REPEATABLE READ | Không | Không | Có | Shared lock giữ đến hết transaction |
+| SERIALIZABLE | Không | Không | Không | Range locks |
+| SNAPSHOT | Không | Không | Không | Row versioning (TempDB) |
 
 #### Chi tiết từng level
 
@@ -2476,7 +2476,7 @@ SQL Server (CDC) → Debezium Connector → Kafka Topics → Consumers (any plat
 | **Simple DR, budget thấp** | Log Shipping |
 | **Offline/mobile sync** | Change Tracking |
 | **Audit trail** | CDC (lưu old/new values) |
-| **Data sync giua cac module** | Outbox Pattern + Background Worker |
+| **Data sync giữa các module** | Outbox Pattern + Background Worker |
 | **Bi-directional (legacy)** | Merge Replication (cân nhắc alternatives) |
 
 ### Lưu ý quan trọng

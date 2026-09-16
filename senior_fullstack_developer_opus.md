@@ -295,13 +295,13 @@ function useSignalR(url: string) {
 
   useEffect(() => {
     connection.start();
-    return () => { connection.stop(); }; // QUAN TRONG: cleanup khi unmount
+    return () => { connection.stop(); }; // QUAN TRỌNG: cleanup khi unmount
   }, [connection]);
 
   return connection;
 }
 
-// Usage - QUAN TRONG: dung functional update, tranh stale closure
+// Usage - QUAN TRỌNG: dùng functional update, tránh stale closure
 useEffect(() => {
   connection.on("ReceiveMessage", (msg: ChatMessage) => {
     setMessages(prev => [...prev, msg]);
@@ -310,15 +310,15 @@ useEffect(() => {
 }, [connection]);
 ```
 
-**Gotcha pho bien:** (1) Quen cleanup `connection.off()` gay memory leak va duplicate messages. (2) Stale closure -- handler bat state cu, phai dung functional update hoac useRef. (3) Khi scale nhieu server instance, phai dung Redis backplane, khong thi message chi den client ket noi cung instance. (4) Khong xu ly reconnection -- user mat ket noi 30 giay se miss messages, can fetch lai history sau reconnect.
+**Gotcha phổ biến:** (1) Quên cleanup `connection.off()` gây memory leak và duplicate messages. (2) Stale closure -- handler bắt state cũ, phải dùng functional update hoặc useRef. (3) Khi scale nhiều server instance, phải dùng Redis backplane, không thì message chỉ đến client kết nối cùng instance. (4) Không xử lý reconnection -- user mất kết nối 30 giây sẽ miss messages, cần fetch lại history sau reconnect.
 
 ---
 
-### Q7. Giai thich cach dat full-stack type safety giua .NET API va React frontend bang OpenAPI code generation. So sanh NSwag vs openapi-typescript.
+### Q7. Giải thích cách đạt full-stack type safety giữa .NET API và React frontend bằng OpenAPI code generation. So sánh NSwag vs openapi-typescript.
 
 **Answer:**
 
-Full-stack type safety nghia la khi thay doi API contract o backend, frontend se bao loi compile-time thay vi crash runtime. Cach tiep can pho bien nhat la generate OpenAPI spec tu .NET, sau do generate TypeScript types/client tu spec do.
+Full-stack type safety nghĩa là khi thay đổi API contract ở backend, frontend sẽ báo lỗi compile-time thay vì crash runtime. Cách tiếp cận phổ biến nhất là generate OpenAPI spec từ .NET, sau đó generate TypeScript types/client từ spec đó.
 
 ```csharp
 // .NET 8 - Tu dong generate OpenAPI spec
@@ -352,22 +352,22 @@ const { data, error } = await client.GET("/api/orders/{id}", {
 | | NSwag | openapi-typescript |
 |---|---|---|
 | Output | Full client class + types | Types only + thin fetch wrapper |
-| Bundle size | Lon (generated code) | Rat nho (types erased khi compile) |
-| Customization | It linh hoat | Dung fetch native, de customize |
-| CI integration | Can .NET runtime | Chi can Node.js |
+| Bundle size | Lớn (generated code) | Rất nhỏ (types erased khi compile) |
+| Customization | Ít linh hoạt | Dùng fetch native, dễ customize |
+| CI integration | Cần .NET runtime | Chỉ cần Node.js |
 
-**Khuyen nghi:** openapi-typescript cho du an moi vi lightweight, tree-shakeable. NSwag phu hop neu team da quen hoac can generate C# client cho cac ung dung ben thu 3. Quan trong nhat: tich hop vao CI -- moi lan build se re-generate types, neu frontend khong compile duoc thi pipeline fail som.
+**Khuyến nghị:** openapi-typescript cho dự án mới vì lightweight, tree-shakeable. NSwag phù hợp nếu team đã quen hoặc cần generate C# client cho các ứng dụng bên thứ 3. Quan trọng nhất: tích hợp vào CI -- mỗi lần build sẽ re-generate types, nếu frontend không compile được thì pipeline fail sớm.
 
 ---
 
-### Q8. Span<T> va Memory<T> trong C# giai quyet bai toan gi? So sanh voi cach JavaScript xu ly binary data (ArrayBuffer, TypedArray). Cho vi du full-stack xu ly file upload.
+### Q8. Span<T> và Memory<T> trong C# giải quyết bài toán gì? So sánh với cách JavaScript xử lý binary data (ArrayBuffer, TypedArray). Cho ví dụ full-stack xử lý file upload.
 
 **Answer:**
 
-`Span<T>` cho phep lam viec voi vung nho lien tuc (contiguous memory) ma khong can allocate array moi, giam GC pressure dang ke. No la stack-only (ref struct), khong the dung trong async method -- khi can async thi dung `Memory<T>`. JavaScript co `ArrayBuffer` + `TypedArray` tuong tu nhung khong co zero-allocation slicing nhu Span.
+`Span<T>` cho phép làm việc với vùng nhớ liên tục (contiguous memory) mà không cần allocate array mới, giảm GC pressure đáng kể. Nó là stack-only (ref struct), không thể dùng trong async method -- khi cần async thì dùng `Memory<T>`. JavaScript có `ArrayBuffer` + `TypedArray` tương tự nhưng không có zero-allocation slicing như Span.
 
 ```csharp
-// .NET 8 - Parse CSV header khong allocate string moi
+// .NET 8 - Parse CSV header không allocate string mới
 public static IEnumerable<Range> ParseCsvHeaders(ReadOnlySpan<char> line)
 {
     var ranges = new List<Range>();
@@ -376,14 +376,14 @@ public static IEnumerable<Range> ParseCsvHeaders(ReadOnlySpan<char> line)
     {
         if (i == line.Length || line[i] == ',')
         {
-            ranges.Add(start..i);  // Zero allocation - chi luu range
+            ranges.Add(start..i);  // Zero allocation - chỉ lưu range
             start = i + 1;
         }
     }
     return ranges;
 }
 
-// File upload endpoint voi streaming (khong load toan bo file vao RAM)
+// File upload endpoint với streaming (không load toàn bộ file vào RAM)
 app.MapPost("/api/upload", async (HttpRequest request, CancellationToken ct) =>
 {
     await using var stream = File.Create($"/uploads/{Guid.NewGuid()}");
@@ -393,7 +393,7 @@ app.MapPost("/api/upload", async (HttpRequest request, CancellationToken ct) =>
 ```
 
 ```typescript
-// React - File upload voi progress va chunk processing
+// React - File upload với progress và chunk processing
 async function uploadFile(file: File, onProgress: (pct: number) => void) {
   const CHUNK_SIZE = 1024 * 1024; // 1MB chunks
   const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
@@ -410,7 +410,7 @@ async function uploadFile(file: File, onProgress: (pct: number) => void) {
 }
 ```
 
-**Diem cot loi:** `Span<T>` giam allocation trong hot path (parsing, serialization) -- benchmark cho thay giam 40-60% GC pause. JavaScript `TypedArray.subarray()` tuong duong Span (shared buffer) con `slice()` tuong duong `ToArray()` (copy). Pitfall: Span khong dung duoc trong async/await, closure, hoac LINQ -- khi can thi chuyen sang `Memory<T>`.
+**Điểm cốt lõi:** `Span<T>` giảm allocation trong hot path (parsing, serialization) -- benchmark cho thấy giảm 40-60% GC pause. JavaScript `TypedArray.subarray()` tương đương Span (shared buffer) còn `slice()` tương đương `ToArray()` (copy). Pitfall: Span không dùng được trong async/await, closure, hoặc LINQ -- khi cần thì chuyển sang `Memory<T>`.
 
 ---
 
@@ -418,25 +418,25 @@ async function uploadFile(file: File, onProgress: (pct: number) => void) {
 
 ---
 
-### Q9. Hay cho vi du thuc te ve vi pham nguyen tac SOLID trong du an .NET Core va cach khac phuc?
+### Q9. Hãy cho ví dụ thực tế về vi phạm nguyên tắc SOLID trong dự án .NET Core và cách khắc phục?
 
 **Answer:**
 
-Vi pham pho bien nhat trong thuc te la **Single Responsibility** va **Dependency Inversion**. Mot controller "beo" vua validate, vua chua business logic, vua goi thang DbContext la dau hieu ro nhat.
+Vi phạm phổ biến nhất trong thực tế là **Single Responsibility** và **Dependency Inversion**. Một controller "béo" vừa validate, vừa chứa business logic, vừa gọi thẳng DbContext là dấu hiệu rõ nhất.
 
 ```csharp
-// VI PHAM: Controller lam qua nhieu viec
+// VI PHẠM: Controller làm quá nhiều việc
 public class OrderController : ControllerBase
 {
     private readonly AppDbContext _db;
     public async Task<IActionResult> Create(OrderDto dto)
     {
-        // validate, tinh gia, apply discount, goi payment, save DB, send email...
-        // 200 dong code o day
+        // validate, tính giá, apply discount, gọi payment, save DB, send email...
+        // 200 dòng code ở đây
     }
 }
 
-// SUA: Tach responsibility ro rang
+// SỬA: Tách responsibility rõ ràng
 public class OrderController : ControllerBase
 {
     private readonly ISender _mediator;
@@ -445,31 +445,31 @@ public class OrderController : ControllerBase
 }
 ```
 
-**Open/Closed** thuong bi vi pham khi dung `if/else` hoac `switch` de xu ly nhieu loai nghiep vu -- giai phap la dung Strategy pattern ket hop DI. **Interface Segregation** bi vi pham khi mot interface co 15-20 method ma cac class implement chi dung 2-3 cai, buoc phai throw `NotImplementedException`.
+**Open/Closed** thường bị vi phạm khi dùng `if/else` hoặc `switch` để xử lý nhiều loại nghiệp vụ -- giải pháp là dùng Strategy pattern kết hợp DI. **Interface Segregation** bị vi phạm khi một interface có 15-20 method mà các class implement chỉ dùng 2-3 cái, buộc phải throw `NotImplementedException`.
 
-Bay thuc te: dung ap dung SOLID mot cach cuong tin. Neu mot service chi co 30 dong code va khong co kha nang mo rong, viec tach ra 5 interface/class chi tao them complexity vo nghia. SOLID la huong dan, khong phai luat.
+Bẫy thực tế: đừng áp dụng SOLID một cách cuồng tín. Nếu một service chỉ có 30 dòng code và không có khả năng mở rộng, việc tách ra 5 interface/class chỉ tạo thêm complexity vô nghĩa. SOLID là hướng dẫn, không phải luật.
 
 ---
 
-### Q10. Repository + Unit of Work pattern co con can thiet khi da dung EF Core khong? Khi nao nen dung, khi nao la thua?
+### Q10. Repository + Unit of Work pattern có còn cần thiết khi đã dùng EF Core không? Khi nào nên dùng, khi nào là thừa?
 
 **Answer:**
 
-Day la cau hoi gay tranh cai nhieu nhat trong cong dong .NET. EF Core **da la** mot implementation cua Repository (DbSet) + Unit of Work (DbContext). Viec wrap them mot lop Generic Repository len tren thuong chi tao ra **leaky abstraction** va giau di suc manh cua EF Core (nhu `Include`, `AsNoTracking`, projection).
+Đây là câu hỏi gây tranh cãi nhiều nhất trong cộng đồng .NET. EF Core **đã là** một implementation của Repository (DbSet) + Unit of Work (DbContext). Việc wrap thêm một lớp Generic Repository lên trên thường chỉ tạo ra **leaky abstraction** và giấu đi sức mạnh của EF Core (như `Include`, `AsNoTracking`, projection).
 
-**Khi KHONG nen dung:** Du an CRUD don gian, team nho, chi dung 1 loai database. Generic Repository kieu `IRepository<T>` voi `GetAll()`, `GetById()` chi tao them mot lop trung gian vo ich.
+**Khi KHÔNG nên dùng:** Dự án CRUD đơn giản, team nhỏ, chỉ dùng 1 loại database. Generic Repository kiểu `IRepository<T>` với `GetAll()`, `GetById()` chỉ tạo thêm một lớp trung gian vô ích.
 
-**Khi NEN dung:** Khi ban thuc su can abstract data access layer -- vi du phai ho tro nhieu loai DB (SQL Server + MongoDB), hoac muon tach biet domain layer hoan toan khoi infrastructure trong Clean Architecture.
+**Khi NÊN dùng:** Khi bạn thực sự cần abstract data access layer -- ví dụ phải hỗ trợ nhiều loại DB (SQL Server + MongoDB), hoặc muốn tách biệt domain layer hoàn toàn khỏi infrastructure trong Clean Architecture.
 
 ```csharp
-// THAY VI Generic Repository, dung Specific Repository / Query Object
+// THAY VÌ Generic Repository, dùng Specific Repository / Query Object
 public interface IOrderRepository
 {
-    Task<Order?> GetPendingOrderWithItems(Guid id);  // ro intent
+    Task<Order?> GetPendingOrderWithItems(Guid id);  // rõ intent
     Task<PagedResult<OrderSummary>> SearchOrders(OrderFilter filter);
 }
 
-// Hoac inject DbContext truc tiep vao handler (Vertical Slice)
+// Hoặc inject DbContext trực tiếp vào handler (Vertical Slice)
 public class GetOrderHandler : IRequestHandler<GetOrderQuery, OrderDto>
 {
     private readonly AppDbContext _db;
@@ -479,18 +479,18 @@ public class GetOrderHandler : IRequestHandler<GetOrderQuery, OrderDto>
 }
 ```
 
-Trade-off: inject thang DbContext thi don gian nhung kho unit test (phai dung in-memory DB hoac Testcontainers). Repository thi de mock nhung tao them abstraction layer. Loi khuyen thuc te: **bat dau khong co Repository**, chi them khi co nhu cau thuc su.
+Trade-off: inject thẳng DbContext thì đơn giản nhưng khó unit test (phải dùng in-memory DB hoặc Testcontainers). Repository thì dễ mock nhưng tạo thêm abstraction layer. Lời khuyên thực tế: **bắt đầu không có Repository**, chỉ thêm khi có nhu cầu thực sự.
 
 ---
 
-### Q11. CQRS + MediatR mang lai loi ich gi? Pipeline behaviors hoat dong ra sao? Khi nao dung la overkill?
+### Q11. CQRS + MediatR mang lại lợi ích gì? Pipeline behaviors hoạt động ra sao? Khi nào dùng là overkill?
 
 **Answer:**
 
-CQRS tach model doc va ghi, giup optimize tung phia doc lap. MediatR la thu vien trien khai mediator pattern, **khong phai CQRS** -- nhung thuong dung chung. Loi ich chinh: decoupling handler khoi controller, va dac biet la **pipeline behaviors** -- cross-cutting concerns dang middleware.
+CQRS tách model đọc và ghi, giúp optimize từng phía độc lập. MediatR là thư viện triển khai mediator pattern, **không phải CQRS** -- nhưng thường dùng chung. Lợi ích chính: decoupling handler khỏi controller, và đặc biệt là **pipeline behaviors** -- cross-cutting concerns dạng middleware.
 
 ```csharp
-// Pipeline behavior: tu dong validate moi command/query
+// Pipeline behavior: tự động validate mọi command/query
 public class ValidationBehavior<TReq, TRes> : IPipelineBehavior<TReq, TRes>
 {
     private readonly IEnumerable<IValidator<TReq>> _validators;
@@ -499,30 +499,30 @@ public class ValidationBehavior<TReq, TRes> : IPipelineBehavior<TReq, TRes>
     {
         var failures = _validators.SelectMany(v => v.Validate(req).Errors);
         if (failures.Any()) throw new ValidationException(failures);
-        return await next();  // goi handler tiep theo trong pipeline
+        return await next();  // gọi handler tiếp theo trong pipeline
     }
 }
 ```
 
-Pipeline behaviors pho bien: **Validation**, **Logging**, **Caching** (cho query), **Transaction** (wrap command trong `BeginTransaction/Commit`), **Performance monitoring**.
+Pipeline behaviors phổ biến: **Validation**, **Logging**, **Caching** (cho query), **Transaction** (wrap command trong `BeginTransaction/Commit`), **Performance monitoring**.
 
-**Khi nao overkill:** Du an CRUD don gian, it business logic. Neu handler chi la 3 dong goi DbContext roi return, ban dang tao them complexity khong can thiet. Ngoai ra MediatR tao **indirection** -- khi debug phai nhay qua nhieu lop, dev moi vao team se kho follow flow. Can nhac dung khi co 10+ use cases phuc tap voi cross-cutting concerns ro rang, khong dung cho module chi co 3-4 endpoint.
+**Khi nào overkill:** Dự án CRUD đơn giản, ít business logic. Nếu handler chỉ là 3 dòng gọi DbContext rồi return, bạn đang tạo thêm complexity không cần thiết. Ngoài ra MediatR tạo **indirection** -- khi debug phải nhảy qua nhiều lớp, dev mới vào team sẽ khó follow flow. Cân nhắc dùng khi có 10+ use cases phức tạp với cross-cutting concerns rõ ràng, không dùng cho module chỉ có 3-4 endpoint.
 
 ---
 
-### Q12. Giai thich cach ap dung Strategy, Factory va Decorator pattern trong .NET Core DI container?
+### Q12. Giải thích cách áp dụng Strategy, Factory và Decorator pattern trong .NET Core DI container?
 
 **Answer:**
 
-Ba pattern nay ket hop voi DI container cua .NET Core rat tu nhien, giup tranh `if/else` chains va tuan thu Open/Closed principle.
+Ba pattern này kết hợp với DI container của .NET Core rất tự nhiên, giúp tránh `if/else` chains và tuân thủ Open/Closed principle.
 
-**Strategy** -- chon algorithm tai runtime:
+**Strategy** -- chọn algorithm tại runtime:
 ```csharp
-// Dang ky nhieu strategy (.NET 8 Keyed Services)
+// Đăng ký nhiều strategy (.NET 8 Keyed Services)
 services.AddKeyedScoped<IPaymentProcessor, VnPayProcessor>("vnpay");
 services.AddKeyedScoped<IPaymentProcessor, MomoProcessor>("momo");
 
-// Resolve bang key
+// Resolve bằng key
 public class PaymentService(IServiceProvider sp)
 {
     public Task Pay(string method, decimal amount)
@@ -533,47 +533,47 @@ public class PaymentService(IServiceProvider sp)
 }
 ```
 
-**Decorator** -- wrap behavior len service co san. Thu vien Scrutor ho tro rat tot:
+**Decorator** -- wrap behavior lên service có sẵn. Thư viện Scrutor hỗ trợ rất tốt:
 ```csharp
 services.AddScoped<IOrderService, OrderService>();
-services.Decorate<IOrderService, CachedOrderService>();   // them caching
-services.Decorate<IOrderService, LoggingOrderService>();  // them logging
-// Chain: request di qua Logging -> Caching -> OrderService thuc
+services.Decorate<IOrderService, CachedOrderService>();   // thêm caching
+services.Decorate<IOrderService, LoggingOrderService>();  // thêm logging
+// Chain: request đi qua Logging -> Caching -> OrderService thực
 ```
 
-**Factory** -- khi can tao instance dua tren runtime data ma DI khong resolve duoc truc tiep, dung `Func<T>` hoac factory class dang ky trong DI.
+**Factory** -- khi cần tạo instance dựa trên runtime data mà DI không resolve được trực tiếp, dùng `Func<T>` hoặc factory class đăng ký trong DI.
 
-Pitfall: dung lam dung decorator qua sau (4-5 lop), debug se rat kho trace.
+Pitfall: đừng lạm dụng decorator quá sâu (4-5 lớp), debug sẽ rất khó trace.
 
 ---
 
-### Q13. So sanh Clean Architecture va Vertical Slice Architecture -- khi nao chon cai nao?
+### Q13. So sánh Clean Architecture và Vertical Slice Architecture -- khi nào chọn cái nào?
 
 **Answer:**
 
-**Clean Architecture** to chuc code theo layer nam ngang: Domain -> Application -> Infrastructure -> Presentation. Moi layer la mot project rieng, dependency huong vao trong.
+**Clean Architecture** tổ chức code theo layer nằm ngang: Domain -> Application -> Infrastructure -> Presentation. Mỗi layer là một project riêng, dependency hướng vào trong.
 
-**Vertical Slice Architecture** to chuc code theo feature doc: moi feature (vi du `CreateOrder`) chua tat ca tu request/response model, handler, validation, DB query trong cung mot folder.
+**Vertical Slice Architecture** tổ chức code theo feature dọc: mỗi feature (ví dụ `CreateOrder`) chứa tất cả từ request/response model, handler, validation, DB query trong cùng một folder.
 
-| Tieu chi | Clean Architecture | Vertical Slice |
+| Tiêu chí | Clean Architecture | Vertical Slice |
 |---|---|---|
-| Cau truc folder | Theo layer (`/Domain`, `/Application`) | Theo feature (`/Features/Orders/Create`) |
-| Coupling | Loose giua layers, shared abstractions | Loose giua features, tight trong feature |
-| Them feature moi | Sua nhieu layer/project | Them 1 folder moi, khong anh huong feature khac |
-| Learning curve | Cao, nhieu abstraction | Thap hon, de hieu tung feature doc lap |
-| Phu hop | Domain phuc tap, team lon, can enforce rule | Feature-driven, team nho-trung, can toc do |
+| Cấu trúc folder | Theo layer (`/Domain`, `/Application`) | Theo feature (`/Features/Orders/Create`) |
+| Coupling | Loose giữa layers, shared abstractions | Loose giữa features, tight trong feature |
+| Thêm feature mới | Sửa nhiều layer/project | Thêm 1 folder mới, không ảnh hưởng feature khác |
+| Learning curve | Cao, nhiều abstraction | Thấp hơn, dễ hiểu từng feature độc lập |
+| Phù hợp | Domain phức tạp, team lớn, cần enforce rule | Feature-driven, team nhỏ-trung, cần tốc độ |
 
-Trade-off quan trong: Clean Architecture de bi **over-engineering** voi qua nhieu interface va mapping. Vertical Slice de bi **code duplication** giua cac feature.
+Trade-off quan trọng: Clean Architecture dễ bị **over-engineering** với quá nhiều interface và mapping. Vertical Slice dễ bị **code duplication** giữa các feature.
 
-Loi khuyen thuc te: bat dau voi Vertical Slice cho MVP, refactor sang Clean Architecture khi domain du phuc tap va team du lon. Nhieu team thanh cong ket hop ca hai: Clean Architecture o muc project structure, Vertical Slice o muc feature organization trong Application layer.
+Lời khuyên thực tế: bắt đầu với Vertical Slice cho MVP, refactor sang Clean Architecture khi domain đủ phức tạp và team đủ lớn. Nhiều team thành công kết hợp cả hai: Clean Architecture ở mức project structure, Vertical Slice ở mức feature organization trong Application layer.
 
 ---
 
-### Q14. Giai thich Aggregate, Value Object va Domain Events trong DDD. Cho vi du thuc te?
+### Q14. Giải thích Aggregate, Value Object và Domain Events trong DDD. Cho ví dụ thực tế?
 
 **Answer:**
 
-**Aggregate** la cluster cac entity co chung business invariant, truy cap qua mot Aggregate Root duy nhat. **Value Object** la object khong co identity, so sanh bang gia tri, immutable. **Domain Events** thong bao "dieu gi do da xay ra" trong domain, giup decouple giua cac aggregate.
+**Aggregate** là cluster các entity có chung business invariant, truy cập qua một Aggregate Root duy nhất. **Value Object** là object không có identity, so sánh bằng giá trị, immutable. **Domain Events** thông báo "điều gì đó đã xảy ra" trong domain, giúp decouple giữa các aggregate.
 
 ```csharp
 // Value Object - C# record + validation
@@ -598,57 +598,57 @@ public class Order : AggregateRoot
     {
         Status = OrderStatus.Completed;
         AddDomainEvent(new OrderCompletedEvent(Id, TotalAmount));
-        // Handler khac se: gui email, cap nhat inventory, tao invoice...
+        // Handler khác sẽ: gửi email, cập nhật inventory, tạo invoice...
     }
 }
 ```
 
-Pitfall thuc te: aggregate qua lon gay lock contention trong DB. Nguyen tac la giu aggregate nho, dung domain events de dong bo giua cac aggregate thay vi nhet tat ca vao mot aggregate root. Mot sai lam pho bien: dung Entity thay cho Value Object cho `Address`, `Money`, `DateRange`.
+Pitfall thực tế: aggregate quá lớn gây lock contention trong DB. Nguyên tắc là giữ aggregate nhỏ, dùng domain events để đồng bộ giữa các aggregate thay vì nhét tất cả vào một aggregate root. Một sai lầm phổ biến: dùng Entity thay cho Value Object cho `Address`, `Money`, `DateRange`.
 
 ---
 
-### Q15. Khi nao dung Dictionary, HashSet, List trong .NET? Phan tich Big-O trong cac tinh huong thuc te?
+### Q15. Khi nào dùng Dictionary, HashSet, List trong .NET? Phân tích Big-O trong các tình huống thực tế?
 
 **Answer:**
 
-Nguyen tac chon dua tren **operation pho bien nhat** trong use case:
+Nguyên tắc chọn dựa trên **operation phổ biến nhất** trong use case:
 
-| Collection | Lookup | Insert | Dung khi |
+| Collection | Lookup | Insert | Dùng khi |
 |---|---|---|---|
-| `List<T>` | O(n) | O(1) amortized | Du lieu it, can index, iterate nhieu |
-| `Dictionary<K,V>` | O(1) avg | O(1) avg | Can map key->value, lookup nhieu |
-| `HashSet<T>` | O(1) avg | O(1) avg | Can check ton tai, loai bo trung lap |
+| `List<T>` | O(n) | O(1) amortized | Dữ liệu ít, cần index, iterate nhiều |
+| `Dictionary<K,V>` | O(1) avg | O(1) avg | Cần map key->value, lookup nhiều |
+| `HashSet<T>` | O(1) avg | O(1) avg | Cần check tồn tại, loại bỏ trùng lặp |
 
 ```csharp
-// SAI: dung List roi .Any() trong vong lap = O(n*m)
+// SAI: dùng List rồi .Any() trong vòng lặp = O(n*m)
 var existingIds = await _db.Products.Select(p => p.Id).ToListAsync();
 foreach (var item in importData)
-    if (existingIds.Any(id => id == item.Id)) { ... }  // O(n) moi lan
+    if (existingIds.Any(id => id == item.Id)) { ... }  // O(n) mỗi lần
 
-// DUNG: dung HashSet = O(n+m)
+// ĐÚNG: dùng HashSet = O(n+m)
 var existingIds = (await _db.Products.Select(p => p.Id).ToListAsync()).ToHashSet();
 foreach (var item in importData)
-    if (existingIds.Contains(item.Id)) { ... }  // O(1) moi lan
+    if (existingIds.Contains(item.Id)) { ... }  // O(1) mỗi lần
 ```
 
-Luu y: voi du lieu nho (duoi ~100 phan tu), `List` co the nhanh hon `Dictionary`/`HashSet` nho cache locality. Voi .NET 6+, `FrozenDictionary` / `FrozenSet` cho read-only scenarios nhanh hon dang ke vi optimize layout tai thoi diem tao.
+Lưu ý: với dữ liệu nhỏ (dưới ~100 phần tử), `List` có thể nhanh hơn `Dictionary`/`HashSet` nhờ cache locality. Với .NET 6+, `FrozenDictionary` / `FrozenSet` cho read-only scenarios nhanh hơn đáng kể vì optimize layout tại thời điểm tạo.
 
 ---
 
-### Q16. So sanh offset-based pagination va keyset (cursor) pagination? Khi nao sorting nen thuc hien trong DB vs in-memory?
+### Q16. So sánh offset-based pagination và keyset (cursor) pagination? Khi nào sorting nên thực hiện trong DB vs in-memory?
 
 **Answer:**
 
-**Offset pagination** (`OFFSET/FETCH` hoac `.Skip().Take()`): don gian, cho phep nhay den page bat ky. Nhuoc diem: page cang lon, DB phai scan va bo qua cang nhieu row.
+**Offset pagination** (`OFFSET/FETCH` hoặc `.Skip().Take()`): đơn giản, cho phép nhảy đến page bất kỳ. Nhược điểm: page càng lớn, DB phải scan và bỏ qua càng nhiều row.
 
-**Keyset pagination** (cursor): dung gia tri cua row cuoi cung lam moc:
+**Keyset pagination** (cursor): dùng giá trị của row cuối cùng làm mốc:
 
 ```csharp
-// Offset: cham dan o page lon
+// Offset: chậm dần ở page lớn
 var page = await _db.Orders.OrderByDescending(o => o.CreatedAt)
     .Skip((pageNum - 1) * pageSize).Take(pageSize).ToListAsync();
 
-// Keyset: toc do on dinh bat ke vi tri
+// Keyset: tốc độ ổn định bất kể vị trí
 var page = await _db.Orders
     .Where(o => o.CreatedAt < lastSeenDate
         || (o.CreatedAt == lastSeenDate && o.Id < lastSeenId))
@@ -656,14 +656,14 @@ var page = await _db.Orders
     .Take(pageSize).ToListAsync();
 ```
 
-| Tieu chi | Offset | Keyset |
+| Tiêu chí | Offset | Keyset |
 |---|---|---|
-| Performance page lon | Kem (O(offset+limit)) | On dinh (O(limit)) |
-| Nhay page ngau nhien | Duoc | Khong (chi next/prev) |
-| Du lieu thay doi lien tuc | Bi trung/mat row | On dinh, khong bi lech |
-| Phu hop | Admin panel, report it data | Feed, infinite scroll, API lon |
+| Performance page lớn | Kém (O(offset+limit)) | Ổn định (O(limit)) |
+| Nhảy page ngẫu nhiên | Được | Không (chỉ next/prev) |
+| Dữ liệu thay đổi liên tục | Bị trùng/mất row | Ổn định, không bị lệch |
+| Phù hợp | Admin panel, report ít data | Feed, infinite scroll, API lớn |
 
-**Sorting:** luon uu tien sort trong DB vi DB da co index. Sort in-memory chi hop ly khi: (1) du lieu da load het vao memory roi (cache), (2) sort logic phuc tap phu thuoc business rule khong the express bang SQL, (3) du lieu tu nhieu nguon can merge roi sort. Pitfall: `.ToList()` roi `.OrderBy()` tren 100K record la cach pho bien nhat de giet performance.
+**Sorting:** luôn ưu tiên sort trong DB vì DB đã có index. Sort in-memory chỉ hợp lý khi: (1) dữ liệu đã load hết vào memory rồi (cache), (2) sort logic phức tạp phụ thuộc business rule không thể express bằng SQL, (3) dữ liệu từ nhiều nguồn cần merge rồi sort. Pitfall: `.ToList()` rồi `.OrderBy()` trên 100K record là cách phổ biến nhất để giết performance.
 
 ---
 
@@ -675,7 +675,7 @@ var page = await _db.Orders
 
 **Answer:**
 
-RESTful API xoay quanh cac nguyen tac: su dung HTTP verbs dung ngu nghia (GET khong thay doi state, PUT la idempotent, POST tao moi), resource-based URI (danh tu so nhieu, khong dung dong tu), stateless communication.
+RESTful API xoay quanh các nguyên tắc: sử dụng HTTP verbs đúng ngữ nghĩa (GET không thay đổi state, PUT là idempotent, POST tạo mới), resource-based URI (danh từ số nhiều, không dùng động từ), stateless communication.
 
 ```csharp
 [ApiController]
@@ -701,7 +701,7 @@ public class OrdersController : ControllerBase
 }
 ```
 
-Pitfall pho bien: tra 200 cho moi thu thay vi dung dung status code (201 Created, 204 No Content, 409 Conflict). Nen dung `[ApiController]` attribute vi no tu dong enable model validation, binding source inference, va `ProblemDetails` response cho 400+. Trong thuc te, nen thiet ke API theo business capability chu khong phai map 1:1 voi database table.
+Pitfall phổ biến: trả 200 cho mọi thứ thay vì dùng đúng status code (201 Created, 204 No Content, 409 Conflict). Nên dùng `[ApiController]` attribute vì nó tự động enable model validation, binding source inference, và `ProblemDetails` response cho 400+. Trong thực tế, nên thiết kế API theo business capability chứ không phải map 1:1 với database table.
 
 ---
 
@@ -709,7 +709,7 @@ Pitfall pho bien: tra 200 cho moi thu thay vi dung dung status code (201 Created
 
 **Answer:**
 
-Co 4 chien luoc chinh: URL path (`/api/v2/orders`), query string (`?api-version=2`), header (`X-Api-Version`), va media type versioning.
+Có 4 chiến lược chính: URL path (`/api/v2/orders`), query string (`?api-version=2`), header (`X-Api-Version`), và media type versioning.
 
 ```csharp
 // .NET 7+ voi Asp.Versioning.Http
@@ -729,9 +729,9 @@ builder.Services.AddApiVersioning(opt =>
 });
 ```
 
-URL path versioning la pho bien nhat vi de hieu, de debug, de cache. Trade-off la URL bi "xau" hon va vi pham nguyen tac URI nen identify resource chu khong phai version.
+URL path versioning là phổ biến nhất vì dễ hiểu, dễ debug, dễ cache. Trade-off là URL bị "xấu" hơn và vi phạm nguyên tắc URI nên identify resource chứ không phải version.
 
-Chien luoc deprecation quan trong khong kem: dung `[ApiVersion("1.0", Deprecated = true)]` ket hop voi `Sunset` header de bao client biet timeline. Nen maintain toi da 2 version dong thoi.
+Chiến lược deprecation quan trọng không kém: dùng `[ApiVersion("1.0", Deprecated = true)]` kết hợp với `Sunset` header để báo client biết timeline. Nên maintain tối đa 2 version đồng thời.
 
 ---
 
@@ -739,7 +739,7 @@ Chien luoc deprecation quan trong khong kem: dung `[ApiVersion("1.0", Deprecated
 
 **Answer:**
 
-`System.Text.Json` (STJ) la default tu .NET Core 3.0, duoc thiet ke cho performance voi allocation thap hon 2-5x so voi Newtonsoft nho `Utf8JsonReader/Writer` lam viec truc tiep tren byte UTF-8. Tu .NET 8, STJ da support source generator tot hon giup trim-friendly cho AOT.
+`System.Text.Json` (STJ) là default từ .NET Core 3.0, được thiết kế cho performance với allocation thấp hơn 2-5x so với Newtonsoft nhờ `Utf8JsonReader/Writer` làm việc trực tiếp trên byte UTF-8. Từ .NET 8, STJ đã support source generator tốt hơn giúp trim-friendly cho AOT.
 
 ```csharp
 // Source generator - zero reflection, AOT-compatible
@@ -751,9 +751,9 @@ builder.Services.ConfigureHttpJsonOptions(opt =>
     opt.SerializerOptions.TypeInfoResolverChain.Add(AppJsonContext.Default));
 ```
 
-Chon Newtonsoft khi: can `$ref`/`$id` handling cho circular references phuc tap, can `JsonPath` query, project dang dung nhieu custom `JsonConverter` Newtonsoft ma migrate ton effort lon, hoac can serialize dynamic/ExpandoObject phuc tap.
+Chọn Newtonsoft khi: cần `$ref`/`$id` handling cho circular references phức tạp, cần `JsonPath` query, project đang dùng nhiều custom `JsonConverter` Newtonsoft mà migrate tốn effort lớn, hoặc cần serialize dynamic/ExpandoObject phức tạp.
 
-Pitfall: STJ mac dinh case-sensitive va khong serialize field (chi property). Khi chuyen tu Newtonsoft sang, day la hai loi pho bien nhat gay mat data silent.
+Pitfall: STJ mặc định case-sensitive và không serialize field (chỉ property). Khi chuyển từ Newtonsoft sang, đây là hai lỗi phổ biến nhất gây mất data silent.
 
 ---
 
@@ -761,11 +761,11 @@ Pitfall: STJ mac dinh case-sensitive va khong serialize field (chi property). Kh
 
 **Answer:**
 
-Khi compiler gap `async`, no generate mot struct implement `IAsyncStateMachine` voi `MoveNext()` method. Moi `await` la mot "checkpoint" -- neu Task chua complete, state machine luu current state, dang ky continuation, roi return. Khi Task complete, continuation duoc schedule qua `SynchronizationContext` (neu co) hoac `ThreadPool`.
+Khi compiler gặp `async`, nó generate một struct implement `IAsyncStateMachine` với `MoveNext()` method. Mỗi `await` là một "checkpoint" -- nếu Task chưa complete, state machine lưu current state, đăng ký continuation, rồi return. Khi Task complete, continuation được schedule qua `SynchronizationContext` (nếu có) hoặc `ThreadPool`.
 
-`SynchronizationContext` trong ASP.NET Core la **null** (khong co nhu ASP.NET classic), nen `ConfigureAwait(false)` khong can thiet trong application code -- chi can trong library code de tranh deadlock khi consumer co SynchronizationContext.
+`SynchronizationContext` trong ASP.NET Core là **null** (không có như ASP.NET classic), nên `ConfigureAwait(false)` không cần thiết trong application code -- chỉ cần trong library code để tránh deadlock khi consumer có SynchronizationContext.
 
-`ValueTask<T>` dung khi: method thuong xuyen return synchronously (cache hit, buffer da co data). No tranh allocation Task object. Nhung **khong duoc** await `ValueTask` nhieu lan, khong `WhenAll` duoc, va khong duoc cache no. Tu .NET 8, nen dung `ValueTask` cho hot path performance-critical. Neu khong chac -- dung `Task<T>` cho an toan vi no it rang buoc hon.
+`ValueTask<T>` dùng khi: method thường xuyên return synchronously (cache hit, buffer đã có data). Nó tránh allocation Task object. Nhưng **không được** await `ValueTask` nhiều lần, không `WhenAll` được, và không được cache nó. Từ .NET 8, nên dùng `ValueTask` cho hot path performance-critical. Nếu không chắc -- dùng `Task<T>` cho an toàn vì nó ít ràng buộc hơn.
 
 ---
 
@@ -773,7 +773,7 @@ Khi compiler gap `async`, no generate mot struct implement `IAsyncStateMachine` 
 
 **Answer:**
 
-`CancellationToken` trong ASP.NET Core tu dong trigger khi client disconnect (request aborted). Nguyen tac la propagate token qua **toan bo call chain** -- tu controller xuong service, repository, den DbContext va HttpClient.
+`CancellationToken` trong ASP.NET Core tự động trigger khi client disconnect (request aborted). Nguyên tắc là propagate token qua **toàn bộ call chain** -- từ controller xuống service, repository, đến DbContext và HttpClient.
 
 ```csharp
 [HttpGet("report")]
@@ -786,7 +786,7 @@ public async Task<IActionResult> GenerateReport(CancellationToken ct)
     return File(pdf, "application/pdf");
 }
 
-// Graceful shutdown voi IHostApplicationLifetime
+// Graceful shutdown với IHostApplicationLifetime
 public class CleanupService : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -797,7 +797,7 @@ public class CleanupService : BackgroundService
 }
 ```
 
-Trong `Program.cs`, configure `HostOptions.ShutdownTimeout` (default 30s) de background service co du thoi gian drain. Pitfall pho bien: quen truyen token vao `HttpClient.SendAsync()` hoac `Task.Delay()`, dan den request da bi cancel nhung server van xu ly ton resource. Voi long-running operation, nen dung `CancellationTokenSource.CreateLinkedTokenSource()` de combine request cancellation voi custom timeout.
+Trong `Program.cs`, configure `HostOptions.ShutdownTimeout` (default 30s) để background service có đủ thời gian drain. Pitfall phổ biến: quên truyền token vào `HttpClient.SendAsync()` hoặc `Task.Delay()`, dẫn đến request đã bị cancel nhưng server vẫn xử lý tốn resource. Với long-running operation, nên dùng `CancellationTokenSource.CreateLinkedTokenSource()` để combine request cancellation với custom timeout.
 
 ---
 
@@ -805,7 +805,7 @@ Trong `Program.cs`, configure `HostOptions.ShutdownTimeout` (default 30s) de bac
 
 **Answer:**
 
-.NET 7 gioi thieu built-in rate limiting middleware voi 4 algorithm: Fixed Window, Sliding Window, Token Bucket, va Concurrency Limiter.
+.NET 7 giới thiệu built-in rate limiting middleware với 4 algorithm: Fixed Window, Sliding Window, Token Bucket, và Concurrency Limiter.
 
 ```csharp
 builder.Services.AddRateLimiter(opt =>
@@ -827,9 +827,9 @@ builder.Services.AddRateLimiter(opt =>
 app.UseRateLimiter();
 ```
 
-Fixed Window don gian nhung co "burst at boundary" problem. Sliding Window giai quyet van de nay. Token Bucket phu hop API cho phep burst ngan. Concurrency Limiter gioi han so request dong thoi (huu ich cho heavy endpoint).
+Fixed Window đơn giản nhưng có "burst at boundary" problem. Sliding Window giải quyết vấn đề này. Token Bucket phù hợp API cho phép burst ngắn. Concurrency Limiter giới hạn số request đồng thời (hữu ích cho heavy endpoint).
 
-Trong production distributed, can Redis-backed rate limiting (thu vien ben thu ba) vi built-in chi hoat dong per-instance. Luon tra `Retry-After` header trong 429 response.
+Trong production distributed, cần Redis-backed rate limiting (thư viện bên thứ ba) vì built-in chỉ hoạt động per-instance. Luôn trả `Retry-After` header trong 429 response.
 
 ---
 
@@ -837,7 +837,7 @@ Trong production distributed, can Redis-backed rate limiting (thu vien ben thu b
 
 **Answer:**
 
-Tu .NET 9, ASP.NET Core tich hop `Microsoft.AspNetCore.OpenApi` thay the dan Swashbuckle. Contract-first nghia la viet OpenAPI spec truoc roi generate code -- giup frontend va backend phat trien song song.
+Từ .NET 9, ASP.NET Core tích hợp `Microsoft.AspNetCore.OpenApi` thay thế dần Swashbuckle. Contract-first nghĩa là viết OpenAPI spec trước rồi generate code -- giúp frontend và backend phát triển song song.
 
 ```csharp
 // .NET 9 built-in OpenAPI
@@ -853,7 +853,7 @@ builder.Services.AddOpenApi(opt =>
 app.MapOpenApi(); // endpoint: /openapi/v1.json
 ```
 
-Dung `[ProducesResponseType]`, `[EndpointSummary]`, `[EndpointDescription]` (Minimal API .NET 7+) de document ro rang. Best practice: tich hop OpenAPI spec validation vao CI pipeline -- neu spec thay doi breaking (xoa field, doi type) thi fail build. Dung tool nhu `oasdiff` de detect breaking changes tu dong. Dung expose Swagger UI o production -- chi bat o development environment.
+Dùng `[ProducesResponseType]`, `[EndpointSummary]`, `[EndpointDescription]` (Minimal API .NET 7+) để document rõ ràng. Best practice: tích hợp OpenAPI spec validation vào CI pipeline -- nếu spec thay đổi breaking (xóa field, đổi type) thì fail build. Dùng tool như `oasdiff` để detect breaking changes tự động. Đừng expose Swagger UI ở production -- chỉ bật ở development environment.
 
 ---
 
@@ -861,17 +861,17 @@ Dung `[ProducesResponseType]`, `[EndpointSummary]`, `[EndpointDescription]` (Min
 
 **Answer:**
 
-Middleware pipeline la chuoi delegate xu ly request theo thu tu FIFO va response theo thu tu LIFO (Russian doll model). Moi middleware goi `next()` de chuyen tiep hoac short-circuit pipeline.
+Middleware pipeline là chuỗi delegate xử lý request theo thứ tự FIFO và response theo thứ tự LIFO (Russian doll model). Mỗi middleware gọi `next()` để chuyển tiếp hoặc short-circuit pipeline.
 
 ```csharp
-// Thu tu middleware CUC KY quan trong
-app.UseExceptionHandler("/error");  // 1. Bat exception tu tat ca middleware phia sau
+// Thứ tự middleware CỰC KỲ quan trọng
+app.UseExceptionHandler("/error");  // 1. Bắt exception từ tất cả middleware phía sau
 app.UseHsts();
 app.UseHttpsRedirection();
-app.UseCors("policy");              // 2. Truoc auth
-app.UseAuthentication();            // 3. Xac thuc
-app.UseAuthorization();             // 4. Phan quyen
-app.UseRateLimiter();               // 5. Sau auth de rate limit per-user
+app.UseCors("policy");              // 2. Trước auth
+app.UseAuthentication();            // 3. Xác thực
+app.UseAuthorization();             // 4. Phân quyền
+app.UseRateLimiter();               // 5. Sau auth để rate limit per-user
 app.MapControllers();
 
 // Custom middleware cho request timing
@@ -890,7 +890,7 @@ public class TimingMiddleware(RequestDelegate next, ILogger<TimingMiddleware> lo
 }
 ```
 
-Pitfall kinh dien: dat CORS sau Authorization -- browser preflight request se bi 401 truoc khi CORS header duoc them, gay loi kho debug. Dung `IMiddleware` (transient) khi can inject scoped service, dung convention-based middleware (singleton implicitly) cho stateless logic vi performance tot hon.
+Pitfall kinh điển: đặt CORS sau Authorization -- browser preflight request sẽ bị 401 trước khi CORS header được thêm, gây lỗi khó debug. Dùng `IMiddleware` (transient) khi cần inject scoped service, dùng convention-based middleware (singleton implicitly) cho stateless logic vì performance tốt hơn.
 
 ---
 
@@ -902,7 +902,7 @@ Pitfall kinh dien: dat CORS sau Authorization -- browser preflight request se bi
 
 **Answer:**
 
-EF Core la full ORM voi change tracking, migration, LINQ provider -- phu hop CRUD-heavy domain. Dapper la micro-ORM, chi map query result sang object -- nhanh hon 5-10x cho read-heavy, reporting.
+EF Core là full ORM với change tracking, migration, LINQ provider -- phù hợp CRUD-heavy domain. Dapper là micro-ORM, chỉ map query result sang object -- nhanh hơn 5-10x cho read-heavy, reporting.
 
 ```csharp
 // Coexistence pattern: share DbConnection
@@ -915,7 +915,7 @@ public class OrderRepository(AppDbContext efContext, IDbConnection dapper)
         await efContext.SaveChangesAsync(ct);
     }
 
-    // Dapper cho complex read - raw SQL, toi uu performance
+    // Dapper cho complex read - raw SQL, tối ưu performance
     public async Task<IEnumerable<OrderSummaryDto>> GetSummaryAsync(int year)
     {
         return await dapper.QueryAsync<OrderSummaryDto>(
@@ -926,7 +926,7 @@ public class OrderRepository(AppDbContext efContext, IDbConnection dapper)
 }
 ```
 
-Nguyen tac: EF Core cho write path (can transaction, change tracking), Dapper cho read path phuc tap (report, dashboard). Co the share cung connection: `efContext.Database.GetDbConnection()`. Pitfall: khong mix EF Core tracking voi Dapper update tren cung entity trong cung request.
+Nguyên tắc: EF Core cho write path (cần transaction, change tracking), Dapper cho read path phức tạp (report, dashboard). Có thể share cùng connection: `efContext.Database.GetDbConnection()`. Pitfall: không mix EF Core tracking với Dapper update trên cùng entity trong cùng request.
 
 ---
 
@@ -934,7 +934,7 @@ Nguyen tac: EF Core cho write path (can transaction, change tracking), Dapper ch
 
 **Answer:**
 
-`AsNoTracking()` tat change tracker -- tiet kiem memory va CPU dang ke (nhanh hon 30-50%). `Compiled Queries` compile expression tree 1 lan, tai su dung. `Split Query` tranh cartesian explosion.
+`AsNoTracking()` tắt change tracker -- tiết kiệm memory và CPU đáng kể (nhanh hơn 30-50%). `Compiled Queries` compile expression tree 1 lần, tái sử dụng. `Split Query` tránh cartesian explosion.
 
 ```csharp
 // Compiled Query
@@ -944,15 +944,15 @@ private static readonly Func<AppDbContext, int, Task<Order?>> _getOrder =
           .Include(o => o.Items)
           .FirstOrDefault(o => o.Id == id));
 
-// Split Query - tranh cartesian explosion
+// Split Query - tránh cartesian explosion
 var orders = await db.Orders
-    .Include(o => o.Items)       // 1000 orders x 50 items = 50k rows neu single query
+    .Include(o => o.Items)       // 1000 orders x 50 items = 50k rows nếu single query
     .Include(o => o.Payments)
-    .AsSplitQuery()              // 3 query rieng, moi query nho gon
+    .AsSplitQuery()              // 3 query riêng, mỗi query nhỏ gọn
     .ToListAsync(ct);
 ```
 
-Trade-off: `AsSplitQuery()` giam data transfer nhung tang so roundtrip -- neu latency den DB cao thi single query co the nhanh hon. Compiled Query huu ich nhat cho hot path duoc goi hang ngan lan/giay. Nen set `AsNoTracking` o DbContext level cho read-only context.
+Trade-off: `AsSplitQuery()` giảm data transfer nhưng tăng số roundtrip -- nếu latency đến DB cao thì single query có thể nhanh hơn. Compiled Query hữu ích nhất cho hot path được gọi hàng ngàn lần/giây. Nên set `AsNoTracking` ở DbContext level cho read-only context.
 
 ---
 
@@ -960,24 +960,24 @@ Trade-off: `AsSplitQuery()` giam data transfer nhung tang so roundtrip -- neu la
 
 **Answer:**
 
-Index strategy phai dua tren actual query patterns, khong phai doan. Composite index thu tu column cuc ky quan trong -- tuan theo quy tac "equality first, range last, high selectivity truoc".
+Index strategy phải dựa trên actual query patterns, không phải đoán. Composite index thứ tự column cực kỳ quan trọng -- tuân theo quy tắc "equality first, range last, high selectivity trước".
 
 ```sql
--- Composite + Covering: tranh key lookup
+-- Composite + Covering: tránh key lookup
 CREATE INDEX IX_Orders_Status_CreatedAt
 ON Orders (Status, CreatedAt DESC)
 INCLUDE (Total, CustomerId);
 
--- Filtered: chi index subset data, nho hon va nhanh hon
+-- Filtered: chỉ index subset data, nhỏ hơn và nhanh hơn
 CREATE INDEX IX_Orders_Active
 ON Orders (CreatedAt DESC)
 WHERE Status = 'Active' AND IsDeleted = 0;
--- Chi huu ich khi filter match < 30% total rows
+-- Chỉ hữu ích khi filter match < 30% total rows
 ```
 
-Covering index chua tat ca column can thiet cho query, tranh key lookup ve clustered index -- co the cai thien performance 10x cho analytical query. Filtered index nho hon, maintain nhanh hon, nhung chi duoc dung khi query co WHERE clause match chinh xac filter condition.
+Covering index chứa tất cả column cần thiết cho query, tránh key lookup về clustered index -- có thể cải thiện performance 10x cho analytical query. Filtered index nhỏ hơn, maintain nhanh hơn, nhưng chỉ được dùng khi query có WHERE clause match chính xác filter condition.
 
-Pitfall: over-indexing lam cham INSERT/UPDATE. Trong EF Core migration, dung `HasIndex().HasFilter()` va `HasIndex().IncludeProperties()` (.NET 7+). Luon kiem tra index usage thuc te bang `sys.dm_db_index_usage_stats` -- xoa index khong duoc dung.
+Pitfall: over-indexing làm chậm INSERT/UPDATE. Trong EF Core migration, dùng `HasIndex().HasFilter()` và `HasIndex().IncludeProperties()` (.NET 7+). Luôn kiểm tra index usage thực tế bằng `sys.dm_db_index_usage_stats` -- xóa index không được dùng.
 
 ---
 
@@ -985,18 +985,18 @@ Pitfall: over-indexing lam cham INSERT/UPDATE. Trong EF Core migration, dung `Ha
 
 **Answer:**
 
-N+1 xay ra khi load parent entity roi lazy load child entity trong loop -- 1 query cho parent + N query cho moi child. Day la "silent performance killer" pho bien nhat.
+N+1 xảy ra khi load parent entity rồi lazy load child entity trong loop -- 1 query cho parent + N query cho mỗi child. Đây là "silent performance killer" phổ biến nhất.
 
 ```csharp
 // N+1 Problem - 1 + N queries
 var orders = await db.Orders.ToListAsync();
 foreach (var order in orders)
-    Console.WriteLine(order.Customer.Name); // Lazy load moi iteration!
+    Console.WriteLine(order.Customer.Name); // Lazy load mỗi iteration!
 
 // Fix 1: Eager loading
 var orders = await db.Orders.Include(o => o.Customer).ToListAsync(ct);
 
-// Fix 2: Projection - tot nhat cho performance
+// Fix 2: Projection - tốt nhất cho performance
 var orders = await db.Orders
     .Select(o => new OrderDto
     {
@@ -1006,7 +1006,7 @@ var orders = await db.Orders
     }).ToListAsync(ct);
 ```
 
-Best practice: **tat lazy loading hoan toan** bang cach khong install proxy package. Projection (Select) la giai phap tot nhat vi chi query dung column can thiet. Trong production, nen co automated test dem so query cho critical endpoint.
+Best practice: **tắt lazy loading hoàn toàn** bằng cách không install proxy package. Projection (Select) là giải pháp tốt nhất vì chỉ query đúng column cần thiết. Trong production, nên có automated test đếm số query cho critical endpoint.
 
 ---
 
@@ -1014,22 +1014,22 @@ Best practice: **tat lazy loading hoan toan** bang cach khong install proxy pack
 
 **Answer:**
 
-Zero-downtime migration yeu cau backward-compatible changes -- code cu va code moi phai chay dong thoi tren cung schema (expand-contract pattern).
+Zero-downtime migration yêu cầu backward-compatible changes -- code cũ và code mới phải chạy đồng thời trên cùng schema (expand-contract pattern).
 
 ```
-// Expand-Contract: doi ten column "Name" -> "FullName"
-// Phase 1 (Expand): Them column moi, deploy code doc/ghi ca hai
+// Expand-Contract: đổi tên column "Name" -> "FullName"
+// Phase 1 (Expand): Thêm column mới, deploy code đọc/ghi cả hai
 ALTER TABLE Customers ADD FullName NVARCHAR(200);
 UPDATE Customers SET FullName = Name;
--- Deploy code V2: write ca Name va FullName, read tu FullName
+-- Deploy code V2: write cả Name và FullName, read từ FullName
 
-// Phase 2 (Contract): Sau khi 100% traffic dung V2
+// Phase 2 (Contract): Sau khi 100% traffic dùng V2
 ALTER TABLE Customers DROP COLUMN Name;
 ```
 
-Nguyen tac vang: **khong bao gio** lam trong mot migration: rename column, change type, drop column, add NOT NULL column without default. Moi thao tac phai tach thanh 2-3 migration rieng biet.
+Nguyên tắc vàng: **không bao giờ** làm trong một migration: rename column, change type, drop column, add NOT NULL column without default. Mọi thao tác phải tách thành 2-3 migration riêng biệt.
 
-Khong dung `dotnet ef database update` o production. Export SQL script bang `dotnet ef migrations script --idempotent`, review ky, roi chay qua CI/CD pipeline. Voi database lon, them column hoac index phai dung `ONLINE = ON` (SQL Server) de tranh lock table. Luon co rollback script cho moi migration.
+Không dùng `dotnet ef database update` ở production. Export SQL script bằng `dotnet ef migrations script --idempotent`, review kỹ, rồi chạy qua CI/CD pipeline. Với database lớn, thêm column hoặc index phải dùng `ONLINE = ON` (SQL Server) để tránh lock table. Luôn có rollback script cho mỗi migration.
 
 ---
 
@@ -1037,15 +1037,15 @@ Khong dung `dotnet ef database update` o production. Export SQL script bang `dot
 
 **Answer:**
 
-SQL Server co 5 isolation level: Read Uncommitted, Read Committed (default), Repeatable Read, Serializable, va Snapshot. Moi level trade-off giua consistency va concurrency/performance.
+SQL Server có 5 isolation level: Read Uncommitted, Read Committed (default), Repeatable Read, Serializable, và Snapshot. Mỗi level trade-off giữa consistency và concurrency/performance.
 
 ```csharp
-// Optimistic concurrency voi EF Core - pho bien nhat cho web app
+// Optimistic concurrency với EF Core - phổ biến nhất cho web app
 public class Order
 {
     public int Id { get; set; }
 
-    [Timestamp] // SQL Server rowversion - tu dong
+    [Timestamp] // SQL Server rowversion - tự động
     public byte[] RowVersion { get; set; } = null!;
 }
 
@@ -1057,11 +1057,11 @@ catch (DbUpdateConcurrencyException ex)
     var dbValues = await entry.GetDatabaseValuesAsync(ct);
     if (dbValues == null) { /* entity deleted */ return; }
     entry.OriginalValues.SetValues(dbValues);
-    await db.SaveChangesAsync(ct); // retry voi gia tri moi
+    await db.SaveChangesAsync(ct); // retry với giá trị mới
 }
 ```
 
-Web application 99% dung Optimistic Concurrency (`[Timestamp]`) vi request ngan, conflict hiem. Pessimistic locking (SELECT FOR UPDATE) chi dung cho critical business logic nhu inventory deduction. Snapshot Isolation tot cho reporting nhung ton them tempdb space. Pitfall: Serializable gay deadlock rat de trong high-concurrency.
+Web application 99% dùng Optimistic Concurrency (`[Timestamp]`) vì request ngắn, conflict hiếm. Pessimistic locking (SELECT FOR UPDATE) chỉ dùng cho critical business logic như inventory deduction. Snapshot Isolation tốt cho reporting nhưng tốn thêm tempdb space. Pitfall: Serializable gây deadlock rất dễ trong high-concurrency.
 
 ---
 
@@ -1069,22 +1069,22 @@ Web application 99% dung Optimistic Concurrency (`[Timestamp]`) vi request ngan,
 
 **Answer:**
 
-Query optimization bat dau tu execution plan -- xem actual plan (khong phai estimated) de biet query thuc su chay the nao. Tim cac operator ton kem: Table Scan, Key Lookup, Sort (spill to tempdb).
+Query optimization bắt đầu từ execution plan -- xem actual plan (không phải estimated) để biết query thực sự chạy thế nào. Tìm các operator tốn kém: Table Scan, Key Lookup, Sort (spill to tempdb).
 
 ```sql
 SET STATISTICS IO ON;
 SET STATISTICS TIME ON;
 
 -- Parameter sniffing problem:
--- SP compiled voi @Status = 'Active' (90% rows) -> table scan plan
--- Khi goi voi @Status = 'VIP' (0.1% rows) -> van dung plan cu!
+-- SP compiled với @Status = 'Active' (90% rows) -> table scan plan
+-- Khi gọi với @Status = 'VIP' (0.1% rows) -> vẫn dùng plan cũ!
 SELECT * FROM Orders WHERE Status = @Status
 OPTION (OPTIMIZE FOR (@Status UNKNOWN));
 ```
 
-Trong EF Core, dung `ToQueryString()` de xem generated SQL truoc khi chay. Dung `Microsoft.EntityFrameworkCore.Diagnostics` de log slow query.
+Trong EF Core, dùng `ToQueryString()` để xem generated SQL trước khi chạy. Dùng `Microsoft.EntityFrameworkCore.Diagnostics` để log slow query.
 
-Checklist: (1) Kiem tra logical reads trong STATISTICS IO, (2) Tranh SELECT * -- dung projection, (3) Kiem tra implicit conversion (nvarchar vs varchar gay index scan thay vi seek), (4) EF Core `HasConversion()` co the gay implicit conversion SQL -- loi an rat kho phat hien.
+Checklist: (1) Kiểm tra logical reads trong STATISTICS IO, (2) Tránh SELECT * -- dùng projection, (3) Kiểm tra implicit conversion (nvarchar vs varchar gây index scan thay vì seek), (4) EF Core `HasConversion()` có thể gây implicit conversion SQL -- lỗi ẩn rất khó phát hiện.
 
 ---
 
@@ -1092,22 +1092,22 @@ Checklist: (1) Kiem tra logical reads trong STATISTICS IO, (2) Tranh SELECT * --
 
 **Answer:**
 
-ADO.NET connection pooling mac dinh bat -- pool size mac dinh 100 per connection string. DbContext trong ASP.NET Core nen register Scoped (1 instance per request) -- day la default cua `AddDbContext`.
+ADO.NET connection pooling mặc định bật -- pool size mặc định 100 per connection string. DbContext trong ASP.NET Core nên register Scoped (1 instance per request) -- đây là default của `AddDbContext`.
 
 ```csharp
-// DbContext pooling - tai su dung instance, giam allocation
+// DbContext pooling - tái sử dụng instance, giảm allocation
 builder.Services.AddDbContextPool<AppDbContext>(opt =>
     opt.UseSqlServer(connStr, sql =>
     {
         sql.EnableRetryOnFailure(3, TimeSpan.FromSeconds(5), null);
         sql.CommandTimeout(30);
     }), poolSize: 1024);
-// Luu y: Pooled DbContext KHONG duoc inject scoped service vao constructor
+// Lưu ý: Pooled DbContext KHÔNG được inject scoped service vào constructor
 ```
 
-`AddDbContextPool` (.NET 6+) giu pool DbContext instance, reset state roi tai su dung -- giam GC pressure dang ke o high-throughput. Trade-off: khong inject service vao DbContext constructor.
+`AddDbContextPool` (.NET 6+) giữ pool DbContext instance, reset state rồi tái sử dụng -- giảm GC pressure đáng kể ở high-throughput. Trade-off: không inject service vào DbContext constructor.
 
-Scaling: Read replica cho read-heavy workload, sharding cho data lon, CQRS tach read/write model hoan toan. Pitfall: connection pool exhaustion khi quen `await` async method hoac DbContext song qua lau (Singleton DbContext la anti-pattern nghiem trong).
+Scaling: Read replica cho read-heavy workload, sharding cho data lớn, CQRS tách read/write model hoàn toàn. Pitfall: connection pool exhaustion khi quên `await` async method hoặc DbContext sống quá lâu (Singleton DbContext là anti-pattern nghiêm trọng).
 
 ---
 
@@ -1119,7 +1119,7 @@ Scaling: Read replica cho read-heavy workload, sharding cho data lon, CQRS tach 
 
 **Answer:**
 
-OAuth2 la authorization framework (cap quyen truy cap resource), OpenID Connect (OIDC) la identity layer tren OAuth2 (xac thuc user). JWT la token format pho bien. Flow pho bien nhat cho web app: Authorization Code + PKCE.
+OAuth2 là authorization framework (cấp quyền truy cập resource), OpenID Connect (OIDC) là identity layer trên OAuth2 (xác thực user). JWT là token format phổ biến. Flow phổ biến nhất cho web app: Authorization Code + PKCE.
 
 ```csharp
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
@@ -1132,14 +1132,14 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
             ValidateAudience = true,
             ValidAudiences = new[] { "orders-api" },
             ValidateLifetime = true,
-            ClockSkew = TimeSpan.FromSeconds(30), // Giam tu default 5 phut
+            ClockSkew = TimeSpan.FromSeconds(30), // Giảm từ default 5 phút
         };
     });
 ```
 
-Pitfalls nghiem trong: (1) Khong validate `aud` claim -- token cua API khac co the dung cho API ban, (2) ClockSkew default 5 phut qua rong, (3) Luu sensitive data trong JWT payload -- no chi Base64 encode, khong encrypt, (4) Dung symmetric key (HMAC) cho distributed system -- phai share secret, nen dung RSA/ECDSA.
+Pitfalls nghiêm trọng: (1) Không validate `aud` claim -- token của API khác có thể dùng cho API bạn, (2) ClockSkew default 5 phút quá rộng, (3) Lưu sensitive data trong JWT payload -- nó chỉ Base64 encode, không encrypt, (4) Dùng symmetric key (HMAC) cho distributed system -- phải share secret, nên dùng RSA/ECDSA.
 
-Access token nen short-lived (5-15 phut), refresh token long-lived + rotation. Khong luu token trong localStorage (XSS risk) -- dung HttpOnly Secure cookie hoac BFF pattern.
+Access token nên short-lived (5-15 phút), refresh token long-lived + rotation. Không lưu token trong localStorage (XSS risk) -- dùng HttpOnly Secure cookie hoặc BFF pattern.
 
 ---
 
@@ -1147,17 +1147,17 @@ Access token nen short-lived (5-15 phut), refresh token long-lived + rotation. K
 
 **Answer:**
 
-RBAC (Role-Based) don gian nhung cung nhac. Policy-based linh hoat hon -- combine nhieu requirement. Resource-based kiem tra quyen dua tren data cu the (vi du: chi owner moi edit duoc order).
+RBAC (Role-Based) đơn giản nhưng cứng nhắc. Policy-based linh hoạt hơn -- combine nhiều requirement. Resource-based kiểm tra quyền dựa trên data cụ thể (ví dụ: chỉ owner mới edit được order).
 
 ```csharp
-// Policy-based: combine nhieu dieu kien
+// Policy-based: combine nhiều điều kiện
 builder.Services.AddAuthorizationBuilder()
     .AddPolicy("SeniorManager", policy =>
         policy.RequireRole("Manager")
               .RequireClaim("experience_years")
               .AddRequirements(new MinExperienceRequirement(5)));
 
-// Resource-based: kiem tra ownership
+// Resource-based: kiểm tra ownership
 public class OrderAuthorizationHandler
     : AuthorizationHandler<EditRequirement, Order>
 {
@@ -1172,7 +1172,7 @@ public class OrderAuthorizationHandler
 }
 ```
 
-Thuc te: dung RBAC cho coarse-grained access (admin vs user), Policy-based cho business rules phuc tap, Resource-based cho row-level security. Dung hardcode role string khap noi -- tap trung vao policy name. Pitfall: `[Authorize(Roles = "Admin")]` scattered khap codebase rat kho maintain.
+Thực tế: dùng RBAC cho coarse-grained access (admin vs user), Policy-based cho business rules phức tạp, Resource-based cho row-level security. Đừng hardcode role string khắp nơi -- tập trung vào policy name. Pitfall: `[Authorize(Roles = "Admin")]` scattered khắp codebase rất khó maintain.
 
 ---
 
@@ -1183,21 +1183,21 @@ Thuc te: dung RBAC cho coarse-grained access (admin vs user), Policy-based cho b
 OWASP Top 10 (2021): Broken Access Control, Cryptographic Failures, Injection, Insecure Design, Security Misconfiguration, Vulnerable Components, Authentication Failures, Data Integrity Failures, Logging Failures, SSRF.
 
 ```csharp
-// 1. SQL Injection - NGUY HIEM vs AN TOAN
-// NGUY HIEM: FromSqlRaw($"SELECT * FROM Users WHERE Name = '{input}'")
-// AN TOAN:
+// 1. SQL Injection - NGUY HIỂM vs AN TOÀN
+// NGUY HIỂM: FromSqlRaw($"SELECT * FROM Users WHERE Name = '{input}'")
+// AN TOÀN:
 db.Users.FromSqlInterpolated($"SELECT * FROM Users WHERE Name = {input}");
 
 // 2. Mass Assignment / Over-posting
 [HttpPost]
 public IActionResult Create([Bind("Name,Email")] UserDto dto)
-// Hoac tot hon: dung DTO rieng cho input, khong bind truc tiep Entity
+// Hoặc tốt hơn: dùng DTO riêng cho input, không bind trực tiếp Entity
 
 // 3. Security headers
 builder.Services.AddHsts(opt => { opt.MaxAge = TimeSpan.FromDays(365); });
 ```
 
-Prevention checklist: (1) `[ValidateAntiForgeryToken]` hoac global filter, (2) Content-Security-Policy header, (3) Enable HSTS, (4) Parameterized query 100%, (5) `dotnet list package --vulnerable` thuong xuyen, (6) FluentValidation cho moi input, (7) Khong expose stack trace o production -- dung `ProblemDetails`. Nguyen tac defense-in-depth: khong bao gio tin tuong chi mot layer bao ve.
+Prevention checklist: (1) `[ValidateAntiForgeryToken]` hoặc global filter, (2) Content-Security-Policy header, (3) Enable HSTS, (4) Parameterized query 100%, (5) `dotnet list package --vulnerable` thường xuyên, (6) FluentValidation cho mọi input, (7) Không expose stack trace ở production -- dùng `ProblemDetails`. Nguyên tắc defense-in-depth: không bao giờ tin tưởng chỉ một layer bảo vệ.
 
 ---
 
@@ -1205,10 +1205,10 @@ Prevention checklist: (1) `[ValidateAntiForgeryToken]` hoac global filter, (2) C
 
 **Answer:**
 
-In transit: TLS 1.2+ bat buoc. At rest: SQL Server TDE encrypt toan bo database file. Column-level: encrypt cac column nhay cam rieng biet.
+In transit: TLS 1.2+ bắt buộc. At rest: SQL Server TDE encrypt toàn bộ database file. Column-level: encrypt các column nhạy cảm riêng biệt.
 
 ```csharp
-// Column-level encryption voi Data Protection API
+// Column-level encryption với Data Protection API
 public class EncryptionService(IDataProtector protector)
 {
     public string Encrypt(string plainText) => protector.Protect(plainText);
@@ -1221,12 +1221,12 @@ modelBuilder.Entity<Customer>()
     .HasConversion(
         v => _encryptor.Encrypt(v),
         v => _encryptor.Decrypt(v))
-    .HasMaxLength(500); // Encrypted data lon hon plaintext
+    .HasMaxLength(500); // Encrypted data lớn hơn plaintext
 ```
 
-Trade-off column-level: khong the query/sort/filter tren encrypted column (tru Always Encrypted deterministic mode cho equality check). Data Protection API tu dong rotate key nhung can configure persistent key storage (Azure Blob, Redis) -- neu khong, restart app = mat key = mat data.
+Trade-off column-level: không thể query/sort/filter trên encrypted column (trừ Always Encrypted deterministic mode cho equality check). Data Protection API tự động rotate key nhưng cần configure persistent key storage (Azure Blob, Redis) -- nếu không, restart app = mất key = mất data.
 
-Pitfall: TDE khong bao ve data trong memory hay query result -- DBA van doc duoc. Always Encrypted bao ve ca khoi DBA nhung han che query capability.
+Pitfall: TDE không bảo vệ data trong memory hay query result -- DBA vẫn đọc được. Always Encrypted bảo vệ cả khỏi DBA nhưng hạn chế query capability.
 
 ---
 
@@ -1234,7 +1234,7 @@ Pitfall: TDE khong bao ve data trong memory hay query result -- DBA van doc duoc
 
 **Answer:**
 
-Hierarchy uu tien (cao den thap): Environment Variables > User Secrets (dev) > appsettings.{Env}.json > appsettings.json. Trong production, dung Azure Key Vault / AWS Secrets Manager -- KHONG BAO GIO commit secrets vao source control.
+Hierarchy ưu tiên (cao đến thấp): Environment Variables > User Secrets (dev) > appsettings.{Env}.json > appsettings.json. Trong production, dùng Azure Key Vault / AWS Secrets Manager -- KHÔNG BAO GIỜ commit secrets vào source control.
 
 ```csharp
 // Production: Azure Key Vault
@@ -1242,11 +1242,11 @@ builder.Configuration.AddAzureKeyVault(
     new Uri("https://myvault.vault.azure.net/"),
     new DefaultAzureCredential()); // Managed Identity - no secrets needed!
 
-// Binding vao strongly-typed options
+// Binding vào strongly-typed options
 builder.Services.AddOptions<DatabaseOptions>()
     .BindConfiguration("Database")
     .ValidateDataAnnotations()
-    .ValidateOnStart(); // Fail fast neu config invalid
+    .ValidateOnStart(); // Fail fast nếu config invalid
 
 public class DatabaseOptions
 {
@@ -1255,7 +1255,7 @@ public class DatabaseOptions
 }
 ```
 
-Pitfalls: (1) Log configuration values ra console/file -- vo tinh expose secrets, (2) Dung appsettings.json cho connection string production, (3) Share Key Vault giua environments, (4) Quen `ValidateOnStart()` -- app chay nhung crash khi can config lan dau. Them `.gitignore` rule va scan repo bang `gitleaks` trong CI.
+Pitfalls: (1) Log configuration values ra console/file -- vô tình expose secrets, (2) Dùng appsettings.json cho connection string production, (3) Share Key Vault giữa environments, (4) Quên `ValidateOnStart()` -- app chạy nhưng crash khi cần config lần đầu. Thêm `.gitignore` rule và scan repo bằng `gitleaks` trong CI.
 
 ---
 
@@ -1263,10 +1263,10 @@ Pitfalls: (1) Log configuration values ra console/file -- vo tinh expose secrets
 
 **Answer:**
 
-CORS kiem soat domain nao duoc goi API. CSP kiem soat resource nao browser duoc load. Security headers bao ve chong clickjacking, MIME sniffing, etc.
+CORS kiểm soát domain nào được gọi API. CSP kiểm soát resource nào browser được load. Security headers bảo vệ chống clickjacking, MIME sniffing, etc.
 
 ```csharp
-// CORS - cu the, KHONG dung AllowAnyOrigin + AllowCredentials cung luc
+// CORS - cụ thể, KHÔNG dùng AllowAnyOrigin + AllowCredentials cùng lúc
 builder.Services.AddCors(opt =>
 {
     opt.AddPolicy("Production", policy =>
@@ -1289,7 +1289,7 @@ app.Use(async (ctx, next) =>
 });
 ```
 
-Pitfalls: (1) `AllowAnyOrigin()` trong production, (2) Thieu `frame-ancestors 'none'` trong CSP -- de bi clickjacking, (3) CORS chi la browser enforcement -- server-to-server request bypass hoan toan, khong thay the authentication. Nen dung library `NWebsec` hoac `NetEscapades.AspNetCore.SecurityHeaders`.
+Pitfalls: (1) `AllowAnyOrigin()` trong production, (2) Thiếu `frame-ancestors 'none'` trong CSP -- dễ bị clickjacking, (3) CORS chỉ là browser enforcement -- server-to-server request bypass hoàn toàn, không thay thế authentication. Nên dùng library `NWebsec` hoặc `NetEscapades.AspNetCore.SecurityHeaders`.
 
 ---
 
@@ -1297,10 +1297,10 @@ Pitfalls: (1) `AllowAnyOrigin()` trong production, (2) Thieu `frame-ancestors 'n
 
 **Answer:**
 
-Validation phai thuc hien o nhieu layer: client-side (UX), API input validation (security), domain validation (business rules), database constraints (last line of defense). Khong bao gio tin client input.
+Validation phải thực hiện ở nhiều layer: client-side (UX), API input validation (security), domain validation (business rules), database constraints (last line of defense). Không bao giờ tin client input.
 
 ```csharp
-// FluentValidation - khai bao ro rang, testable
+// FluentValidation - khai báo rõ ràng, testable
 public class CreateOrderValidator : AbstractValidator<CreateOrderRequest>
 {
     public CreateOrderValidator()
@@ -1316,15 +1316,15 @@ public class CreateOrderValidator : AbstractValidator<CreateOrderRequest>
     }
 }
 
-// Anti-tampering: KHONG tin client-sent price, re-calculate server-side
+// Anti-tampering: KHÔNG tin client-sent price, re-calculate server-side
 public async Task<Order> CreateOrder(CreateOrderRequest req)
 {
     var product = await _db.Products.FindAsync(req.ProductId);
-    var total = product.Price * req.Quantity; // Server-side price, khong dung req.Price
+    var total = product.Price * req.Quantity; // Server-side price, không dùng req.Price
 }
 ```
 
-Anti-tampering patterns: khong trust hidden fields (price, userId), dung server-side state cho moi thu critical, implement idempotency key de prevent duplicate submission, validate file upload (check magic bytes, khong chi extension). Pitfall: chi validate o client -- attacker bypass JavaScript de dang bang Postman/curl.
+Anti-tampering patterns: không trust hidden fields (price, userId), dùng server-side state cho mọi thứ critical, implement idempotency key để prevent duplicate submission, validate file upload (check magic bytes, không chỉ extension). Pitfall: chỉ validate ở client -- attacker bypass JavaScript dễ dàng bằng Postman/curl.
 
 ---
 
@@ -1332,7 +1332,7 @@ Anti-tampering patterns: khong trust hidden fields (price, userId), dung server-
 
 **Answer:**
 
-Audit logging ghi lai WHO did WHAT to WHICH resource WHEN. GDPR yeu cau right to access, right to erasure, data portability. PCI-DSS yeu cau encrypt cardholder data, restrict access, audit trail.
+Audit logging ghi lại WHO did WHAT to WHICH resource WHEN. GDPR yêu cầu right to access, right to erasure, data portability. PCI-DSS yêu cầu encrypt cardholder data, restrict access, audit trail.
 
 ```csharp
 // EF Core interceptor cho automatic audit logging
@@ -1370,9 +1370,9 @@ public async Task AnonymizeUser(Guid userId)
 }
 ```
 
-PCI-DSS: khong bao gio luu CVV, mask card number (chi hien thi 4 so cuoi), dung tokenization (Stripe, Braintree) thay vi tu xu ly card data -- giam PCI scope dang ke.
+PCI-DSS: không bao giờ lưu CVV, mask card number (chỉ hiển thị 4 số cuối), dùng tokenization (Stripe, Braintree) thay vì tự xử lý card data -- giảm PCI scope đáng kể.
 
-Audit log phai immutable (append-only table, khong UPDATE/DELETE), luu rieng biet database/service, va retain theo compliance requirement (PCI: 1 nam online, 7 nam archive). Pitfall: log PII vao audit trail roi khong the xoa khi user request GDPR erasure -- design audit log de separate PII tu dau.
+Audit log phải immutable (append-only table, không UPDATE/DELETE), lưu riêng biệt database/service, và retain theo compliance requirement (PCI: 1 năm online, 7 năm archive). Pitfall: log PII vào audit trail rồi không thể xóa khi user request GDPR erasure -- design audit log để separate PII từ đầu.
 
 ---
 
@@ -1380,15 +1380,15 @@ Audit log phai immutable (append-only table, khong UPDATE/DELETE), luu rieng bie
 
 ---
 
-### Q41. Trinh bay phuong phap co he thong de debug mot API endpoint cham (response > 5 giay)?
+### Q41. Trình bày phương pháp có hệ thống để debug một API endpoint chậm (response > 5 giây)?
 
 **Answer:**
 
-Tiep can theo **top-down, do truoc khi doan**. Khong bao gio doan nguyen nhan roi fix -- phai co data chung minh.
+Tiếp cận theo **top-down, đo trước khi đoán**. Không bao giờ đoán nguyên nhân rồi fix -- phải có data chứng minh.
 
-**Buoc 1 - Reproduce & Measure:** Xac nhan van de. Kiem tra co phai cham consistent hay chi intermittent.
+**Bước 1 - Reproduce & Measure:** Xác nhận vấn đề. Kiểm tra có phải chậm consistent hay chỉ intermittent.
 
-**Buoc 2 - Xac dinh layer nao cham:**
+**Bước 2 - Xác định layer nào chậm:**
 ```csharp
 app.Use(async (context, next) =>
 {
@@ -1399,60 +1399,60 @@ app.Use(async (context, next) =>
 });
 ```
 
-**Buoc 3 - Thu hep pham vi:**
-- **Database cham?** Bat EF Core logging, kiem tra query plan, tim N+1, missing index.
-- **External service cham?** Kiem tra timeout, them circuit breaker, can nhac cache.
-- **Business logic nang?** Profile CPU, kiem tra vong lap O(n^2), large object allocation.
-- **Network/infra?** Kiem tra DNS resolution, connection pool exhaustion, container resource limits.
+**Bước 3 - Thu hẹp phạm vi:**
+- **Database chậm?** Bật EF Core logging, kiểm tra query plan, tìm N+1, missing index.
+- **External service chậm?** Kiểm tra timeout, thêm circuit breaker, cân nhắc cache.
+- **Business logic nặng?** Profile CPU, kiểm tra vòng lặp O(n^2), large object allocation.
+- **Network/infra?** Kiểm tra DNS resolution, connection pool exhaustion, container resource limits.
 
-**Buoc 4 - Fix & Verify:** Ap dung fix, do lai voi cung dieu kien, so sanh before/after.
+**Bước 4 - Fix & Verify:** Áp dụng fix, đo lại với cùng điều kiện, so sánh before/after.
 
-Kinh nghiem thuc te: 80% API cham la do database -- N+1 query, missing index, hoac load qua nhieu data khong can thiet (SELECT * thay vi projection). Luon kiem tra DB truoc.
+Kinh nghiệm thực tế: 80% API chậm là do database -- N+1 query, missing index, hoặc load quá nhiều data không cần thiết (SELECT * thay vì projection). Luôn kiểm tra DB trước.
 
 ---
 
-### Q42. Lam the nao de phat hien va xu ly memory leak trong .NET Core? Dung tool gi?
+### Q42. Làm thế nào để phát hiện và xử lý memory leak trong .NET Core? Dùng tool gì?
 
 **Answer:**
 
-Memory leak trong .NET thuong do: **event handler khong unsubscribe**, **static collection tich luy**, **IDisposable khong dispose** (HttpClient, DbContext), hoac **closure capture** giu reference ngoai y muon.
+Memory leak trong .NET thường do: **event handler không unsubscribe**, **static collection tích lũy**, **IDisposable không dispose** (HttpClient, DbContext), hoặc **closure capture** giữ reference ngoài ý muốn.
 
-**Phat hien bang dotnet-counters (khong can restart app):**
+**Phát hiện bằng dotnet-counters (không cần restart app):**
 ```bash
 dotnet-counters monitor --process-id <PID> \
     --counters System.Runtime[gc-heap-size,gen-2-gc-count,gen-2-size]
 ```
-Neu `gc-heap-size` tang lien tuc sau moi Gen 2 GC, rat co the co leak.
+Nếu `gc-heap-size` tăng liên tục sau mỗi Gen 2 GC, rất có thể có leak.
 
-**Phan tich bang dotnet-dump:**
+**Phân tích bằng dotnet-dump:**
 ```bash
 dotnet-dump collect --process-id <PID>
 dotnet-dump analyze <dump-file>
-> dumpheap -stat          # xem object nao nhieu nhat
-> dumpheap -type MyClass  # tim instance cu the
-> gcroot <address>        # tim ai dang giu reference
+> dumpheap -stat          # xem object nào nhiều nhất
+> dumpheap -type MyClass  # tìm instance cụ thể
+> gcroot <address>        # tìm ai đang giữ reference
 ```
 
-**Phong ngua:** Dung `IHttpClientFactory` thay vi `new HttpClient()` (tranh socket exhaustion). Dang ky DbContext la Scoped, khong phai Singleton. Pitfall: `MemoryCache` khong gioi han size mac dinh -- phai set `SizeLimit` hoac `AbsoluteExpiration`, neu khong cache se grow vo han.
+**Phòng ngừa:** Dùng `IHttpClientFactory` thay vì `new HttpClient()` (tránh socket exhaustion). Đăng ký DbContext là Scoped, không phải Singleton. Pitfall: `MemoryCache` không giới hạn size mặc định -- phải set `SizeLimit` hoặc `AbsoluteExpiration`, nếu không cache sẽ grow vô hạn.
 
 ---
 
-### Q43. Trinh bay quy trinh xu ly incident production? OODA loop ap dung nhu the nao?
+### Q43. Trình bày quy trình xử lý incident production? OODA loop áp dụng như thế nào?
 
 **Answer:**
 
-**OODA loop** (Observe - Orient - Decide - Act) ap dung cho incident response:
+**OODA loop** (Observe - Orient - Decide - Act) áp dụng cho incident response:
 
-**Observe:** Phat hien qua alert, user report, hoac health check fail. Xac dinh **severity**:
-- **SEV1:** System down, mat doanh thu -> respond ngay, escalate.
-- **SEV2:** Feature chinh bi loi -> respond trong 30 phut.
-- **SEV3:** Feature phu bi loi, workaround co san -> respond trong gio lam viec.
+**Observe:** Phát hiện qua alert, user report, hoặc health check fail. Xác định **severity**:
+- **SEV1:** System down, mất doanh thu -> respond ngay, escalate.
+- **SEV2:** Feature chính bị lỗi -> respond trong 30 phút.
+- **SEV3:** Feature phụ bị lỗi, workaround có sẵn -> respond trong giờ làm việc.
 
-**Orient:** Deploy gan day? Traffic spike? DB change? Dependency bi loi?
+**Orient:** Deploy gần đây? Traffic spike? DB change? Dependency bị lỗi?
 
-**Decide:** Chon giua rollback, hotfix, scale up, hoac toggle feature flag. Uu tien **khoi phuc service truoc, tim root cause sau**.
+**Decide:** Chọn giữa rollback, hotfix, scale up, hoặc toggle feature flag. Ưu tiên **khôi phục service trước, tìm root cause sau**.
 
-**Act:** Thuc hien mitigation. Mot nguoi fix, mot nguoi communication (cap nhat status page, thong bao stakeholder).
+**Act:** Thực hiện mitigation. Một người fix, một người communication (cập nhật status page, thông báo stakeholder).
 
 **Communication template:**
 ```
@@ -1463,17 +1463,17 @@ ETA: 30 minutes
 Next update: 14:30
 ```
 
-Nguyen tac vang: **MTTD + MTTR** quan trong hon MTBF. Invest vao monitoring va runbook hon la co gang prevent moi failure.
+Nguyên tắc vàng: **MTTD + MTTR** quan trọng hơn MTBF. Invest vào monitoring và runbook hơn là cố gắng prevent mọi failure.
 
 ---
 
-### Q44. Lam the nao phat hien N+1 query trong EF Core ma khong can profiler ben ngoai?
+### Q44. Làm thế nào phát hiện N+1 query trong EF Core mà không cần profiler bên ngoài?
 
 **Answer:**
 
-N+1 xay ra khi load mot list entity roi lazy-load navigation property trong vong lap -- 1 query cho list + N query cho moi item.
+N+1 xảy ra khi load một list entity rồi lazy-load navigation property trong vòng lặp -- 1 query cho list + N query cho mỗi item.
 
-**Cach 1 - Bat EF Core logging:**
+**Cách 1 - Bật EF Core logging:**
 ```csharp
 optionsBuilder
     .LogTo(Console.WriteLine, LogLevel.Information)
@@ -1481,7 +1481,7 @@ optionsBuilder
     .EnableDetailedErrors();
 ```
 
-**Cach 2 - EF Core Interceptor dem query per request:**
+**Cách 2 - EF Core Interceptor đếm query per request:**
 ```csharp
 public class QueryCountInterceptor : DbCommandInterceptor
 {
@@ -1497,33 +1497,33 @@ public class QueryCountInterceptor : DbCommandInterceptor
         return base.ReaderExecutingAsync(cmd, data, result, ct);
     }
 }
-// Trong middleware: reset dau request, log cuoi request. Alert neu > 10 queries.
+// Trong middleware: reset đầu request, log cuối request. Alert nếu > 10 queries.
 ```
 
-**Cach 3:** Dung `ConfigureWarnings` de throw exception khi lazy loading xay ra:
+**Cách 3:** Dùng `ConfigureWarnings` để throw exception khi lazy loading xảy ra:
 ```csharp
 optionsBuilder.ConfigureWarnings(w =>
     w.Throw(CoreEventId.NavigationLazyLoading));
 ```
 
-**Fix:** `.Include()` / `.ThenInclude()` (eager loading), hoac tot hon la **projection** voi `.Select()` de chi lay dung field can.
+**Fix:** `.Include()` / `.ThenInclude()` (eager loading), hoặc tốt hơn là **projection** với `.Select()` để chỉ lấy đúng field cần.
 
 ---
 
-### Q45. Giai thich cach chan doan deadlock trong SQL Server va trong async code .NET?
+### Q45. Giải thích cách chẩn đoán deadlock trong SQL Server và trong async code .NET?
 
 **Answer:**
 
-Day la hai loai deadlock khac nhau nhung deu gay he thong treo.
+Đây là hai loại deadlock khác nhau nhưng đều gây hệ thống treo.
 
-**SQL Server Deadlock:** Hai transaction lock resource theo thu tu nguoc nhau. Chan doan: bat **Deadlock Graph** qua Extended Events, hoac query `sys.dm_exec_requests`. Fix: dam bao cac transaction access table/row **theo cung thu tu**, giam transaction scope, dung `SNAPSHOT ISOLATION` khi phu hop.
+**SQL Server Deadlock:** Hai transaction lock resource theo thứ tự ngược nhau. Chẩn đoán: bật **Deadlock Graph** qua Extended Events, hoặc query `sys.dm_exec_requests`. Fix: đảm bảo các transaction access table/row **theo cùng thứ tự**, giảm transaction scope, dùng `SNAPSHOT ISOLATION` khi phù hợp.
 
-**Async Deadlock trong .NET:** Pho bien nhat la goi `.Result` hoac `.Wait()` tren async method trong synchronization context (ASP.NET Framework cu, WPF, WinForms):
+**Async Deadlock trong .NET:** Phổ biến nhất là gọi `.Result` hoặc `.Wait()` trên async method trong synchronization context (ASP.NET Framework cũ, WPF, WinForms):
 ```csharp
-// DEADLOCK trong ASP.NET Framework (KHONG xay ra trong ASP.NET Core)
+// DEADLOCK trong ASP.NET Framework (KHÔNG xảy ra trong ASP.NET Core)
 public IActionResult Get()
 {
-    var data = GetDataAsync().Result;  // block thread, giu sync context
+    var data = GetDataAsync().Result;  // block thread, giữ sync context
     return Ok(data);
 }
 
@@ -1535,17 +1535,17 @@ public async Task<IActionResult> Get()
 }
 ```
 
-ASP.NET Core khong co `SynchronizationContext` nen it gap dang nay, nhung van co the deadlock khi dung `SemaphoreSlim` hoac custom sync primitives sai cach. Nguyen tac: **async all the way** -- khong bao gio mix sync va async code.
+ASP.NET Core không có `SynchronizationContext` nên ít gặp dạng này, nhưng vẫn có thể deadlock khi dùng `SemaphoreSlim` hoặc custom sync primitives sai cách. Nguyên tắc: **async all the way** -- không bao giờ mix sync và async code.
 
 ---
 
-### Q46. Lam sao debug hieu qua trong he thong distributed? Correlation ID, OpenTelemetry va structured logging hoat dong ra sao?
+### Q46. Làm sao debug hiệu quả trong hệ thống distributed? Correlation ID, OpenTelemetry và structured logging hoạt động ra sao?
 
 **Answer:**
 
-Trong distributed system, mot request di qua 5-10 service. Khong co correlation thi log chi la dong text vo nghia. Ba tru cot observability: **Logs**, **Metrics**, **Traces**.
+Trong distributed system, một request đi qua 5-10 service. Không có correlation thì log chỉ là đống text vô nghĩa. Ba trụ cột observability: **Logs**, **Metrics**, **Traces**.
 
-**Correlation ID** -- gan mot ID duy nhat cho moi request, truyen qua moi service:
+**Correlation ID** -- gán một ID duy nhất cho mỗi request, truyền qua mọi service:
 ```csharp
 app.Use(async (context, next) =>
 {
@@ -1559,9 +1559,9 @@ app.Use(async (context, next) =>
 });
 ```
 
-**Structured Logging** (Serilog) -- log dang key-value de co the query:
+**Structured Logging** (Serilog) -- log dạng key-value để có thể query:
 ```csharp
-// Thay vi: Log.Info($"Order {orderId} created by {userId}")
+// Thay vì: Log.Info($"Order {orderId} created by {userId}")
 Log.Information("Order created {@OrderId} by {@UserId}", orderId, userId);
 // => Query trong Seq/Kibana: WHERE OrderId = 'xxx' AND CorrelationId = 'yyy'
 ```
@@ -1573,59 +1573,59 @@ builder.Services.AddOpenTelemetry()
         .AddAspNetCoreInstrumentation()
         .AddHttpClientInstrumentation()
         .AddSqlClientInstrumentation()
-        .AddOtlpExporter());  // xuat sang Jaeger, Zipkin, hoac Grafana Tempo
+        .AddOtlpExporter());  // xuất sang Jaeger, Zipkin, hoặc Grafana Tempo
 ```
 
-Khi debug incident: tim correlation ID tu error log, query trace de thay toan bo call chain, xac dinh service/span nao cham hoac loi.
+Khi debug incident: tìm correlation ID từ error log, query trace để thấy toàn bộ call chain, xác định service/span nào chậm hoặc lỗi.
 
 ---
 
-### Q47. Race condition la gi? Cho vi du trong .NET va cach xu ly?
+### Q47. Race condition là gì? Cho ví dụ trong .NET và cách xử lý?
 
 **Answer:**
 
-Race condition xay ra khi nhieu thread/request truy cap shared resource dong thoi va ket qua phu thuoc vao thu tu thuc thi. Day la loai bug nguy hiem vi **kho reproduce**.
+Race condition xảy ra khi nhiều thread/request truy cập shared resource đồng thời và kết quả phụ thuộc vào thứ tự thực thi. Đây là loại bug nguy hiểm vì **khó reproduce**.
 
-**Vi du kinh dien -- double spending:**
+**Ví dụ kinh điển -- double spending:**
 ```csharp
-// Hai request dong thoi rut tien tu cung account
+// Hai request đồng thời rút tiền từ cùng account
 public async Task Withdraw(Guid accountId, decimal amount)
 {
     var account = await _db.Accounts.FindAsync(accountId);
-    if (account.Balance >= amount)   // ca 2 request deu thay balance = 1000
+    if (account.Balance >= amount)   // cả 2 request đều thấy balance = 1000
     {
-        account.Balance -= amount;   // ca 2 deu tru 800 -> balance = 200
-        await _db.SaveChangesAsync();// nhung dung ra phai fail request thu 2
+        account.Balance -= amount;   // cả 2 đều trừ 800 -> balance = 200
+        await _db.SaveChangesAsync();// nhưng đúng ra phải fail request thứ 2
     }
 }
 ```
 
-**Giai phap theo cap do:**
+**Giải pháp theo cấp độ:**
 
-1. **Optimistic Concurrency (pho bien nhat):** EF Core `[Timestamp]` / `[ConcurrencyCheck]` -- SaveChanges throw `DbUpdateConcurrencyException` neu data da bi thay doi -> retry.
+1. **Optimistic Concurrency (phổ biến nhất):** EF Core `[Timestamp]` / `[ConcurrencyCheck]` -- SaveChanges throw `DbUpdateConcurrencyException` nếu data đã bị thay đổi -> retry.
 
-2. **Pessimistic Locking:** `SELECT ... WITH (UPDLOCK, ROWLOCK)` -- lock row trong DB. Dung khi conflict rate cao.
+2. **Pessimistic Locking:** `SELECT ... WITH (UPDLOCK, ROWLOCK)` -- lock row trong DB. Dùng khi conflict rate cao.
 
-3. **Distributed Lock** (Redis): Khi xu ly cross-service, dung `RedLock` algorithm.
+3. **Distributed Lock** (Redis): Khi xử lý cross-service, dùng `RedLock` algorithm.
 
-4. **Idempotency Key:** Cho moi operation mot unique key, check truoc khi execute -- dac biet quan trong cho payment.
+4. **Idempotency Key:** Cho mỗi operation một unique key, check trước khi execute -- đặc biệt quan trọng cho payment.
 
-Trade-off: Optimistic lock don gian, performance tot khi conflict it. Pessimistic lock chac chan hon nhung giam throughput. 90% truong hop dung optimistic concurrency + retry la du.
+Trade-off: Optimistic lock đơn giản, performance tốt khi conflict ít. Pessimistic lock chắc chắn hơn nhưng giảm throughput. 90% trường hợp dùng optimistic concurrency + retry là đủ.
 
 ---
 
-### Q48. Post-mortem analysis nen thuc hien nhu the nao? Blameless culture co nghia la gi trong thuc te?
+### Q48. Post-mortem analysis nên thực hiện như thế nào? Blameless culture có nghĩa là gì trong thực tế?
 
 **Answer:**
 
-Post-mortem la qua trinh phan tich incident de **hoc hoi va ngan chan tai dien**, khong phai de quy trach nhiem.
+Post-mortem là quá trình phân tích incident để **học hỏi và ngăn chặn tái diễn**, không phải để quy trách nhiệm.
 
-**Blameless culture** nghia la: tap trung vao **he thong va quy trinh** da fail, khong phai **con nguoi**. Mot engineer deploy code loi len production khong phai la root cause -- root cause la: tai sao code review khong catch? Tai sao khong co automated test? Tai sao deploy process cho phep push thang len prod?
+**Blameless culture** nghĩa là: tập trung vào **hệ thống và quy trình** đã fail, không phải **con người**. Một engineer deploy code lỗi lên production không phải là root cause -- root cause là: tại sao code review không catch? Tại sao không có automated test? Tại sao deploy process cho phép push thẳng lên prod?
 
 **Template post-mortem:**
 ```markdown
-## Incident: [Ten] - [Ngay]
-## Severity: SEV2 | Duration: 45 phut | Users affected: ~2000
+## Incident: [Tên] - [Ngày]
+## Severity: SEV2 | Duration: 45 phút | Users affected: ~2000
 
 ## Timeline (UTC)
 - 14:00 - Deploy version 2.3.1
@@ -1636,24 +1636,24 @@ Post-mortem la qua trinh phan tich incident de **hoc hoi va ngan chan tai dien**
 - 14:25 - Service restored
 
 ## Root Cause
-Migration script khong duoc include trong deployment pipeline.
+Migration script không được include trong deployment pipeline.
 
 ## Contributing Factors
-- Khong co checklist cho DB migration trong deploy process
-- Staging environment da apply migration thu cong truoc do
+- Không có checklist cho DB migration trong deploy process
+- Staging environment đã apply migration thủ công trước đó
 
 ## Action Items
-- [ ] Them migration check vao CI/CD pipeline (owner: DevOps, deadline: 2 tuan)
-- [ ] Tao runbook cho DB migration rollback (owner: Backend lead, deadline: 1 tuan)
-- [ ] Them health check endpoint kiem tra DB schema version (owner: Dev team)
+- [ ] Thêm migration check vào CI/CD pipeline (owner: DevOps, deadline: 2 tuần)
+- [ ] Tạo runbook cho DB migration rollback (owner: Backend lead, deadline: 1 tuần)
+- [ ] Thêm health check endpoint kiểm tra DB schema version (owner: Dev team)
 
 ## Lessons Learned
 - Manual steps in deployment = ticking time bomb
-- Staging phai reflect production process chinh xac
+- Staging phải reflect production process chính xác
 ```
 
-Quy tac: post-mortem phai duoc thuc hien trong vong **48 gio** sau incident. Moi action item phai co **owner** va **deadline** cu the. Review lai action items trong sprint planning de dam bao duoc thuc hien.
+Quy tắc: post-mortem phải được thực hiện trong vòng **48 giờ** sau incident. Mọi action item phải có **owner** và **deadline** cụ thể. Review lại action items trong sprint planning để đảm bảo được thực hiện.
 
 ---
 
-> **Summary:** 48 cau hoi, 6 sections, moi section 8 cau. Cac cau tra loi duoc viet o muc senior voi trade-offs, code examples, va kinh nghiem thuc te. Dung de on tap phong van vi tri Senior Full-Stack Developer (.NET Core + ReactJS).
+> **Summary:** 48 câu hỏi, 6 sections, mỗi section 8 câu. Các câu trả lời được viết ở mức senior với trade-offs, code examples, và kinh nghiệm thực tế. Dùng để ôn tập phỏng vấn vị trí Senior Full-Stack Developer (.NET Core + ReactJS).
