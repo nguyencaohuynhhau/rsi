@@ -220,3 +220,23 @@ Khi Flash sale diễn ra, ta có 2 cách trừ kho nguyên tử trên Redis:
 - **API (Producer):** Những người lọt qua được cửa ải Redis ở Tầng 2 (tức là có hàng) sẽ được Backend nhét message `OrderRequest` vào RabbitMQ. API lập tức trả về HTTP 202 (Accepted) kèm lời nhắn "Hệ thống đang xử lý". Giao diện người dùng sẽ hiện Spinner quay.
 - **Worker (Consumer):** Lấy từng message ra từ RabbitMQ theo thứ tự (`PrefetchCount = 1`) và thong thả thực thi lệnh Update vào Database (Sử dụng Optimistic Update ở Tầng 1 để chốt lần cuối).
 - **Phản hồi UI (SignalR):** Sau khi ghi DB thành công, Worker dùng SignalR bắn message trực tiếp tới `ConnectionId` của User đó: "Chúc mừng, thanh toán thành công!". Trình duyệt nhận được message sẽ tắt Spinner và chuyển hướng đến trang thanh toán. Đây là cơ chế Asynchronous Request-Reply hoàn hảo cho các hệ thống tải cao.
+
+#### Chi tiết Luồng Dữ Liệu End-to-End (Từ Frontend đến Backend tới DB và trả ngược lại)
+Để làm rõ tại sao kiến trúc lại theo hình phễu (**Redis chặn trước $\rightarrow$ RabbitMQ $\rightarrow$ Database**), hãy xem xét luồng dữ liệu khi 10.000 user cùng click mua 1 sản phẩm:
+
+1. **Frontend (Chống Spam):** User click "Mua ngay". JS lập tức `disabled = true` nút bấm và hiện loading spinner. Bắn request `POST /api/buy` lên Backend.
+2. **Backend API (Cái khiên Redis):** 
+   - 10.000 request đập vào API. Backend gọi hàm Redis `DECR` (hoặc Lua Script) để trừ kho.
+   - Do Redis xử lý đơn luồng cực nhanh (chịu được >100.000 ops/sec), nó trả về `1` (thành công) cho 1 request đầu tiên, và trả về `< 0` (thất bại) cho 9.999 request đến trễ.
+   - **Fail-fast:** 9.999 request bị từ chối ngay lập tức, API trả về `HTTP 400 Out of stock` trong chưa tới 50 mili-giây. Frontend của 9.999 người này tắt spinner và hiện popup "Đã hết hàng". *Tại sao không đưa hàng đợi (Queue) lên bước này?* Vì nếu tống 10.000 request vào Queue, hệ thống tốn I/O lưu trữ vô ích, và người dùng thứ 10.000 phải chờ xoay vòng 5 phút chỉ để nhận thông báo "hết hàng".
+3. **Message Queue (RabbitMQ):** 
+   - Duy nhất 1 người thành công lọt qua màng lọc Redis. Backend đóng gói thông tin người này thành Message và ném vào RabbitMQ.
+   - API trả về `HTTP 202 Accepted`. Màn hình của người này vẫn tiếp tục xoay vòng chờ đợi. Hệ thống lúc này siêu nhẹ do 9.999 kẻ chật chội đã bị đuổi đi.
+4. **Worker & Database (Ghi chép chậm rãi):** 
+   - Một Worker C# chạy ngầm móc Message của người kia ra khỏi Queue.
+   - Chạy lệnh SQL Optimistic Locking (`UPDATE ... WHERE Stock >= 1`) để tạo Order, chốt trừ kho CSDL.
+5. **Backend trả ngược Frontend (SignalR WebSockets):**
+   - Sau khi CSDL báo `RowsAffected = 1`, Worker gọi SignalR Hub bắn một event chứa kết quả xuống đúng `ConnectionId` của người may mắn đó.
+   - Trình duyệt bắt được event, tắt spinner, báo "Thanh toán thành công" và redirect đến cổng thanh toán.
+
+Toàn bộ quá trình từ lúc click đến lúc có kết quả cuối cùng diễn ra trơn tru, không có connection nào của CSDL bị block, không xảy ra Over-selling, và User Experience (UX) được đẩy lên mức tối đa.
