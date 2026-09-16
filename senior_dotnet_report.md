@@ -248,3 +248,67 @@ Khi Flash sale diễn ra, ta có 2 cách trừ kho nguyên tử trên Redis:
    - Trình duyệt bắt được event, tắt spinner, báo "Tạo đơn thành công" và redirect đến cổng thanh toán.
 
 Toàn bộ quá trình chia làm 2 giai đoạn: **Redis bảo vệ hệ thống / kiểm soát luồng vào** và **Database bảo vệ tính đúng đắn của dữ liệu / ghi sổ sách**. Cách tiếp cận này loại bỏ hoàn toàn Over-selling, ngăn DB bị quá tải, và mang lại User Experience hoàn hảo.
+
+#### Bài toán Nâng cao: Đảm bảo thứ tự tuyệt đối (Strict FIFO) & Network Race Condition
+Một lỗ hổng kinh điển ở thiết kế trên là khoảng trống thời gian giữa bước 2 (Redis) và bước 3 (RabbitMQ). Do độ trễ mạng (Network Latency), Server Backend A được Redis cấp vé trước Server Backend B, nhưng do mạng của Server A chậm hơn, Message của Server A lại lọt vào RabbitMQ *sau* Server B. 
+
+Với Flash Sale thông thường, sự đảo lộn vài mili-giây này không ảnh hưởng vì tổng hàng bán ra vẫn không đổi. Nhưng nếu nghiệp vụ **bắt buộc khắt khe về thứ tự** (VD: Xếp hàng mua vé VIP chọn chỗ, ai bấm trước phải được trước 100%), ta có hai cách giải quyết:
+
+- **Giải pháp 1: Cấp số thứ tự (Sequence Ticket) trong Redis**
+  Trong Lua Script, ta gọi thêm lệnh `INCR` để lấy số thứ tự cho request đó. Redis sẽ trả về kết quả kiểu: *"Anh được mua, và vé của anh là vé số 2"*. Backend nhét Message vào RabbitMQ mang theo thuộc tính `Ticket_ID = 2`. 
+  Tại Worker, khi kéo Message ra, nó không xử lý ngay mà đưa vào một bộ đệm sắp xếp (Resequencer Pattern). Cụ thể, Worker bị ép phải đợi xử lý xong đơn của `Ticket_ID = 1` rồi mới được lôi `Ticket_ID = 2` ra ghi DB. (Cách này xử lý triệt để nhưng code phức tạp và giảm tốc độ throughput).
+
+- **Giải pháp 2: Sử dụng Redis Streams (Best Practice để xóa bỏ độ trễ mạng)**
+  Bỏ qua RabbitMQ. Ta gộp thao tác xếp hàng vào chung với bước trừ kho bên trong Redis bằng **Redis Streams**. 
+  Bên trong Lua Script, ngay sau khi kiểm tra và trừ kho (`DECRBY`) thành công, script chạy luôn lệnh `XADD` để ném trực tiếp data mua hàng vào Streams. Do Lua Script chạy nguyên tử trên đúng 1 luồng của Redis, chuỗi thao tác *[Kiểm tra] $\rightarrow$ [Trừ kho] $\rightarrow$ [Xếp hàng]* diễn ra liền mạch trong 1 nhịp CPU. Không hề có kẽ hở cho mạng mẽo xen vào. Thứ tự (FIFO) được bảo đảm chính xác 100% tuyệt đối. Background Worker phía sau chỉ việc consume trực tiếp từ Redis Streams để ghi chậm rãi xuống Database.
+
+  **Code minh họa (Lua Script & C#):**
+  *Lua Script (Kết hợp Trừ kho & Ghi Stream nguyên tử):*
+  ```lua
+  local stockKey = KEYS[1]
+  local streamKey = KEYS[2]
+  local requestedQty = tonumber(ARGV[1])
+  local userId = ARGV[2]
+
+  local currentStock = tonumber(redis.call('GET', stockKey))
+  if not currentStock or currentStock < requestedQty then
+      return 0 -- Không đủ hàng
+  else
+      -- 1. Trừ kho
+      redis.call('DECRBY', stockKey, requestedQty)
+      
+      -- 2. Đẩy thẳng thông tin đơn hàng vào Redis Streams
+      -- ký tự '*' giúp Redis tự động sinh Message ID theo Timestamp chuẩn xác tới mili-giây
+      redis.call('XADD', streamKey, '*', 'UserId', userId, 'Quantity', requestedQty)
+      
+      return 1 -- Thành công
+  end
+  ```
+
+  *C# Backend API (Gọi Script thay vì ném vào RabbitMQ):*
+  ```csharp
+  var script = @"..."; // Đặt chuỗi Lua script ở trên vào đây
+  var result = (int)await _redisDb.ScriptEvaluateAsync(script, 
+      new RedisKey[] { "product_stock:1", "order_stream:product:1" }, 
+      new RedisValue[] { 2, "user_999" } // VD: User_999 muốn mua số lượng 2
+  );
+
+  if (result == 1) return Ok("Hệ thống đang xử lý đơn hàng...");
+  else return BadRequest("Đã hết hàng!");
+  ```
+
+  *C# Background Worker (Đọc từ Stream để chốt DB):*
+  ```csharp
+  // Worker chạy ngầm sẽ dùng Consumer Group để đọc tuần tự (thay cho RabbitMQ)
+  var messages = await _redisDb.StreamReadGroupAsync(
+      "order_stream:product:1", "OrderProcessingGroup", "Worker_1", ">", count: 1);
+      
+  foreach (var msg in messages) {
+      var userId = msg.Values.FirstOrDefault(x => x.Name == "UserId").Value;
+      var qty = msg.Values.FirstOrDefault(x => x.Name == "Quantity").Value;
+      
+      // -> Thực thi câu lệnh SQL Optimistic Locking ở đây
+      // -> Báo hoàn thành (ACK) để Redis xóa Message khỏi Queue
+      await _redisDb.StreamAcknowledgeAsync("order_stream:product:1", "OrderProcessingGroup", msg.Id);
+  }
+  ```
