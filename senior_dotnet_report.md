@@ -334,3 +334,37 @@ Nó là một cấu trúc dữ liệu dạng **Append-only Log** (tương tự k
 | **Định tuyến (Routing)** | Đơn giản, dạng ống thẳng đuột (Log). | Rất mạnh mẽ với hệ thống Exchange (Direct, Topic, Fanout). Dễ dàng định tuyến: *1 message ném vào 3 queue khác nhau*. |
 | **Xử lý lỗi (DLQ & Retry)**| Dev phải tự code tay hoàn toàn logic xử lý retry (`XPENDING`, `XCLAIM`). | Hỗ trợ Native: Tự động đếm số lần fail và đẩy sang Dead Letter Queue (DLQ) cực kỳ tiện lợi. |
 | **Tình huống khuyên dùng**| Flash Sale, Event Sourcing, nơi cần **tốc độ siêu tốc**, gom chung Infrastructure (dùng ké Redis) và cần **Strict FIFO**. | Hệ thống Enterprise Microservices, chia tách nghiệp vụ đa luồng, cần định tuyến phức tạp và lưu trữ an toàn cao nhất. |
+
+---
+
+## Phụ Lục 2: Kiến trúc Event-Driven cho hệ thống F&B bằng RabbitMQ
+
+Trong các bài toán hệ thống F&B (Food & Beverage - chuỗi nhà hàng, trà sữa, app giao đồ ăn), việc làm mất một đơn hàng đồng nghĩa với thất thoát doanh thu, khách hàng giận dữ và vận hành tại quán rơi vào hỗn loạn. Khi hệ thống tiến lên kiến trúc Microservices, **RabbitMQ là sự lựa chọn BẮT BUỘC** (thay vì Redis Streams). Dưới đây là 4 kịch bản thực chiến minh chứng cho điều này:
+
+### 1. Định tuyến phức tạp (Complex Routing - Publish/Subscribe)
+Khi một khách hàng thanh toán thành công 1 ly Trà sữa, hệ thống không chỉ làm 1 việc mà phải thực thi 4 nghiệp vụ song song:
+- **KDS (Kitchen Display System):** Bắn order xuống màn hình nhà bếp để pha chế.
+- **POS (Point of Sale):** Bắn thông tin về máy thu ngân để in hóa đơn.
+- **Loyalty System:** Gọi dịch vụ cộng điểm thành viên.
+- **Notification:** Bắn thông báo Zalo/App cho khách: "Đơn đang được chuẩn bị".
+
+👉 **Sức mạnh RabbitMQ:** Sử dụng **Exchange (Fanout hoặc Topic)**. Backend API chỉ việc ném đúng 1 message "OrderPaid" vào Exchange. RabbitMQ sẽ tự động nhân bản và "chia bài" sang 4 Queue khác nhau cho 4 service độc lập. Nếu dùng Redis Streams, dev phải tự code logic chia luồng này rất cồng kềnh và dễ sinh lỗi.
+
+### 2. Sự cố rớt mạng cục bộ tại quán (Durability & Khả năng dồn ứ)
+Mạng Internet tại các cửa hàng F&B thường xuyên chập chờn. Giả sử trưa Chủ Nhật khách đông nghẹt, mạng ở quán rớt 30 phút, màn hình Bếp (KDS) mất kết nối với Server trung tâm.
+- Hàng ngàn đơn hàng đặt qua App vẫn liên tục đổ về Server.
+- Các message này phải được xếp hàng chờ (dồn ứ) một cách an toàn.
+- **Sức mạnh RabbitMQ:** RabbitMQ lưu message xuống **ổ cứng (Disk)**. Nó có thể dồn ứ an toàn hàng chục triệu đơn hàng mà không bị sập. Khi mạng ở quán có lại, Bếp sẽ tự động kéo một loạt hàng ngàn đơn về in từ từ. Ngược lại, nếu dùng Redis (chỉ chạy trên RAM), việc dồn ứ hàng triệu message sẽ vắt kiệt RAM $\rightarrow$ Gây OOM (Out of Memory) làm sập toàn bộ hệ thống trung tâm.
+
+### 3. Máy in bill kẹt giấy & Lỗi phần cứng (Dead Letter Queue - DLQ)
+Máy in tem dán ly ở quán hết giấy hoặc bị kẹt. App nhà bếp kéo message từ Queue về in nhưng bị văng lỗi (Exception).
+- **Sức mạnh RabbitMQ:** Tích hợp sẵn cơ chế **Retry & DLQ**. Nó sẽ thử bắt bếp in lại (ví dụ 3 lần). Nếu vẫn thất bại, RabbitMQ tự động ném message đơn hàng đó sang một hòm rác an toàn gọi là **Dead Letter Queue (DLQ)**. 
+- Quản lý cửa hàng chỉ cần nạp giấy vào máy in, mở Dashboard Admin và bấm "Re-queue" để máy in bù lại lệnh đó. Hoàn toàn không rớt đơn. Redis Streams không hề có tính năng này tự động.
+
+### 4. Đơn hàng hẹn giờ / Delay Queue
+- F&B luôn có các nghiệp vụ trễ: *"Khách đặt món nhưng chưa chuyển khoản, giữ đơn 15 phút, sau 15 phút không trả tiền thì tự động hủy đơn"*, hoặc *"2 tiếng sau khi hoàn tất đơn, tự động bắn tin nhắn xin Review 5 sao"*.
+- **Sức mạnh RabbitMQ:** Cung cấp **Delay Exchange** hoặc plugin **TTL (Time-To-Live)**. RabbitMQ có thể ngâm 1 message trong bụng đúng 15 phút rồi mới thả vào Queue cho Worker chạy lệnh Hủy đơn. Redis Streams không được thiết kế cho việc hẹn giờ tinh tế như thế này.
+
+### Tổng kết
+- **Redis Streams:** Đóng vai trò như một **"Lưới lọc rác siêu tốc"**, đứng ngay sau API để hứng chịu bão traffic cho các nghiệp vụ chớp nhoáng (Flash Sale).
+- **RabbitMQ:** Đóng vai trò là **"Trái tim vận hành" (Backbone)**. Mọi luồng xử lý kinh doanh cốt lõi (Pha chế, Giao hàng, Tích điểm, Thanh toán) đều phải đi qua RabbitMQ để đảm bảo tính toàn vẹn dữ liệu (Durability), không bao giờ mất đơn và dễ dàng phục hồi khi nhà hàng gặp sự cố phần cứng/mạng.
