@@ -180,9 +180,9 @@ Báo cáo này tổng hợp, phân tích và trả lời chuyên sâu các câu 
 
 ## 10. Xử Lý Đồng Thời (Concurrency) & Bài Toán Bán Lố (Over-selling)
 
-### Q: Hệ thống Flash Sale có 1 tồn kho nhưng 10.000 người cùng bấm mua. Làm sao để giải quyết triệt để bài toán Race Condition và thiết kế hệ thống thế nào để không sập?
+### Q: Hệ thống Flash Sale có 5 tồn kho nhưng 10.000 người cùng bấm mua. Làm sao để giải quyết triệt để bài toán Race Condition và thiết kế hệ thống thế nào để không sập?
 **Trả lời (Góc nhìn Architect):**
-Bản chất của việc bán lố (over-selling) là do nhiều luồng (thread) cùng đọc được `Stock = 1`, vượt qua vòng kiểm tra `if (stock > 0)` và cùng gọi lệnh Update trừ kho. Để giải quyết, ta cần thiết kế 3 tầng phòng thủ: Tối ưu CSDL (SQL Server), Chặn request ở RAM (Redis), và Xếp hàng bằng Message Queue (RabbitMQ).
+Bản chất của việc bán lố (over-selling) là do nhiều luồng (thread) cùng đọc được `Stock = 5`, vượt qua vòng kiểm tra `if (stock > 0)` và cùng gọi lệnh Update trừ kho. Để giải quyết, ta cần thiết kế 3 tầng phòng thủ: Tối ưu CSDL (SQL Server), Chặn request ở RAM (Redis), và Xếp hàng bằng Message Queue (RabbitMQ).
 
 #### Tầng 1: Khóa ở cấp độ Database (SQL Server)
 Nếu chỉ dựa vào Database, chúng ta có 2 cách tiếp cận để chặn Race Condition:
@@ -222,21 +222,23 @@ Khi Flash sale diễn ra, ta có 2 cách trừ kho nguyên tử trên Redis:
 - **Phản hồi UI (SignalR):** Sau khi ghi DB thành công, Worker dùng SignalR bắn message trực tiếp tới `ConnectionId` của User đó: "Chúc mừng, thanh toán thành công!". Trình duyệt nhận được message sẽ tắt Spinner và chuyển hướng đến trang thanh toán. Đây là cơ chế Asynchronous Request-Reply hoàn hảo cho các hệ thống tải cao.
 
 #### Chi tiết Luồng Dữ Liệu End-to-End (Từ Frontend đến Backend tới DB và trả ngược lại)
-Để làm rõ tại sao kiến trúc lại theo hình phễu (**Redis chặn trước $\rightarrow$ RabbitMQ $\rightarrow$ Database**), hãy xem xét luồng dữ liệu khi 10.000 user cùng click mua 1 sản phẩm:
+Để làm rõ tại sao kiến trúc lại theo hình phễu (**Redis chặn trước $\rightarrow$ RabbitMQ $\rightarrow$ Database**) và tại sao phải quản lý tồn kho ở hai cấp độ (Cache và Source of Truth), hãy xem xét luồng dữ liệu khi 10.000 user cùng click mua một sản phẩm chỉ còn tồn kho bằng 5:
 
 1. **Frontend (Chống Spam):** User click "Mua ngay". JS lập tức `disabled = true` nút bấm và hiện loading spinner. Bắn request `POST /api/buy` lên Backend.
-2. **Backend API (Cái khiên Redis):** 
-   - 10.000 request đập vào API. Backend gọi hàm Redis `DECR` (hoặc Lua Script) để trừ kho.
-   - Do Redis xử lý đơn luồng cực nhanh (chịu được >100.000 ops/sec), nó trả về `1` (thành công) cho 1 request đầu tiên, và trả về `< 0` (thất bại) cho 9.999 request đến trễ.
-   - **Fail-fast:** 9.999 request bị từ chối ngay lập tức, API trả về `HTTP 400 Out of stock` trong chưa tới 50 mili-giây. Frontend của 9.999 người này tắt spinner và hiện popup "Đã hết hàng". *Tại sao không đưa hàng đợi (Queue) lên bước này?* Vì nếu tống 10.000 request vào Queue, hệ thống tốn I/O lưu trữ vô ích, và người dùng thứ 10.000 phải chờ xoay vòng 5 phút chỉ để nhận thông báo "hết hàng".
+2. **Backend API (Cái khiên Redis - Khóa/Trừ kho Reservation):** 
+   - 10.000 request đập vào API. Backend gọi hàm Redis `DECR` (hoặc sử dụng Lua Script) để trừ kho trên Cache.
+   - **Bản chất bước này:** Trừ kho ở Redis *không phải là chốt đơn hàng*, mà là bước **"phát số thứ tự" (Reservation / Khóa luồng)**. 
+   - Do Redis xử lý đơn luồng (Single-threaded Event Loop) trên RAM, lệnh `DECR` mang tính Atomic tuyệt đối. Nó thực hiện trừ tuần tự và chỉ có đúng 5 request đầu tiên nhận được giá trị $\ge 0$. 9.995 request đến trễ sẽ nhận về $< 0$.
+   - **Fail-fast:** 9.995 request bị từ chối ngay lập tức, API trả về `HTTP 400 Out of stock`. Frontend của 9.995 người này tắt spinner và hiện popup "Đã hết hàng". *Tại sao không nhét hàng đợi (Queue) vào bước này?* Vì nếu tống cả 10.000 request vào Queue, hệ thống lãng phí I/O vô ích, và người thứ 10.000 sẽ phải đợi xoay spinner 5 phút chỉ để nhận tin "Hết hàng".
 3. **Message Queue (RabbitMQ):** 
-   - Duy nhất 1 người thành công lọt qua màng lọc Redis. Backend đóng gói thông tin người này thành Message và ném vào RabbitMQ.
-   - API trả về `HTTP 202 Accepted`. Màn hình của người này vẫn tiếp tục xoay vòng chờ đợi. Hệ thống lúc này siêu nhẹ do 9.999 kẻ chật chội đã bị đuổi đi.
-4. **Worker & Database (Ghi chép chậm rãi):** 
-   - Một Worker C# chạy ngầm móc Message của người kia ra khỏi Queue.
-   - Chạy lệnh SQL Optimistic Locking (`UPDATE ... WHERE Stock >= 1`) để tạo Order, chốt trừ kho CSDL.
+   - Đúng 5 người may mắn cầm được "vé" đi qua màng lọc Redis. Backend đóng gói thông tin 5 người này thành 5 Message `OrderRequest` và đẩy vào RabbitMQ.
+   - API ngay lập tức trả về `HTTP 202 Accepted` cho 5 người này. Màn hình của họ tiếp tục xoay vòng chờ đợi, không lo bị HTTP Timeout.
+4. **Worker & Database (Khóa/Trừ kho Source of Truth & Rollback):** 
+   - Một hoặc nhiều Background Worker móc từng Message ra khỏi Queue để bắt đầu xử lý nghiệp vụ phức tạp (tạo mã đơn, kiểm tra tài khoản, mã giảm giá...).
+   - **Trừ kho DB (Chốt đơn thật):** Thực thi lệnh SQL Optimistic Locking (`UPDATE Product SET Stock = Stock - 1 WHERE Id = @Id AND Stock >= 1`). Đây mới là bước **ghi chép vĩnh viễn (Source of Truth)**. Việc kiểm tra `Stock >= 1` lại một lần nữa ở DB giúp tránh lỗi mâu thuẫn hệ thống.
+   - **Cơ chế Rollback (Compensation):** Nếu việc ghi CSDL của 1 trong 5 người bị thất bại (do user bị chặn, lỗi kết nối DB, nghiệp vụ khác không thoả mãn...), Worker bắt buộc phải gọi lệnh `INCR` (cộng thêm 1) trả lại tồn kho vào Redis để "nhả vé". Lúc này người tiếp theo (nếu ứng dụng có cơ chế queue chờ hoặc user f5 bấm lại) sẽ có cơ hội mua lại sản phẩm bị rớt này.
 5. **Backend trả ngược Frontend (SignalR WebSockets):**
-   - Sau khi CSDL báo `RowsAffected = 1`, Worker gọi SignalR Hub bắn một event chứa kết quả xuống đúng `ConnectionId` của người may mắn đó.
-   - Trình duyệt bắt được event, tắt spinner, báo "Thanh toán thành công" và redirect đến cổng thanh toán.
+   - Chỉ khi nào CSDL báo `RowsAffected = 1` (nghiệp vụ chính thức hoàn tất), Worker mới gọi SignalR Hub bắn một sự kiện chứa kết quả xuống đúng `ConnectionId` của người mua.
+   - Trình duyệt bắt được event, tắt spinner, báo "Tạo đơn thành công" và redirect đến cổng thanh toán.
 
-Toàn bộ quá trình từ lúc click đến lúc có kết quả cuối cùng diễn ra trơn tru, không có connection nào của CSDL bị block, không xảy ra Over-selling, và User Experience (UX) được đẩy lên mức tối đa.
+Toàn bộ quá trình chia làm 2 giai đoạn: **Redis bảo vệ hệ thống / kiểm soát luồng vào** và **Database bảo vệ tính đúng đắn của dữ liệu / ghi sổ sách**. Cách tiếp cận này loại bỏ hoàn toàn Over-selling, ngăn DB bị quá tải, và mang lại User Experience hoàn hảo.
