@@ -202,19 +202,20 @@ Khi Flash sale diễn ra, ta có 2 cách trừ kho nguyên tử trên Redis:
   - Dùng hàm `StringDecrementAsync`, thao tác này nguyên tử (atomic): trừ 1 và trả về giá trị mới ngay lập tức.
   - *Code:* `long remainingStock = await _redisDb.StringDecrementAsync("product_stock:1");`
   - Nếu `remainingStock >= 0` $\rightarrow$ Cho phép đi tiếp. Nếu `< 0` $\rightarrow$ Trả về lỗi "Hết hàng" (HTTP 400).
-- **Cách 2: Dùng Lua Script (Kiểm soát chặt chẽ nhất)**
-  - Redis chạy đơn luồng (single-threaded). Bằng cách gửi một đoạn Lua Script, Redis sẽ thực thi khối code đó nguyên tử từ đầu đến cuối mà không bị can thiệp bởi request khác.
+- **Cách 2: Dùng Lua Script (Kiểm soát chặt chẽ & Hỗ trợ mua nhiều sản phẩm)**
+  - Redis chạy đơn luồng (single-threaded). Bằng cách gửi một đoạn Lua Script, Redis sẽ thực thi khối code đó nguyên tử từ đầu đến cuối mà không bị can thiệp bởi request khác. Vô cùng hữu ích khi user muốn mua số lượng > 1 (VD: mua 2 sản phẩm cùng lúc).
   - *Lua Script:*
     ```lua
     local stock = tonumber(redis.call('GET', KEYS[1]))
-    if stock <= 0 then
-        return 0 -- Hết hàng
+    local requested_qty = tonumber(ARGV[1])
+    if not stock or stock < requested_qty then
+        return 0 -- Không đủ hàng
     else
-        redis.call('DECR', KEYS[1])
+        redis.call('DECRBY', KEYS[1], requested_qty)
         return 1 -- Trừ thành công
     end
     ```
-  - *Lợi ích:* Đảm bảo kho không bao giờ rớt xuống số âm (như Cách 1). Trả về chính xác 1 (thành công) hoặc 0 (thất bại).
+  - *Lợi ích:* Kiểm tra chính xác số lượng tồn so với số lượng mua, đảm bảo kho không bao giờ rớt xuống số âm. Trả về chính xác 1 (thành công) hoặc 0 (thất bại).
 
 #### Tầng 3: Xếp hàng với RabbitMQ & Cập nhật UI với SignalR
 - **API (Producer):** Những người lọt qua được cửa ải Redis ở Tầng 2 (tức là có hàng) sẽ được Backend nhét message `OrderRequest` vào RabbitMQ. API lập tức trả về HTTP 202 (Accepted) kèm lời nhắn "Hệ thống đang xử lý". Giao diện người dùng sẽ hiện Spinner quay.
@@ -226,17 +227,22 @@ Khi Flash sale diễn ra, ta có 2 cách trừ kho nguyên tử trên Redis:
 
 1. **Frontend (Chống Spam):** User click "Mua ngay". JS lập tức `disabled = true` nút bấm và hiện loading spinner. Bắn request `POST /api/buy` lên Backend.
 2. **Backend API (Cái khiên Redis - Khóa/Trừ kho Reservation):** 
-   - 10.000 request đập vào API. Backend gọi hàm Redis `DECR` (hoặc sử dụng Lua Script) để trừ kho trên Cache.
-   - **Bản chất bước này:** Trừ kho ở Redis *không phải là chốt đơn hàng*, mà là bước **"phát số thứ tự" (Reservation / Khóa luồng)**. 
-   - Do Redis xử lý đơn luồng (Single-threaded Event Loop) trên RAM, lệnh `DECR` mang tính Atomic tuyệt đối. Nó thực hiện trừ tuần tự và chỉ có đúng 5 request đầu tiên nhận được giá trị $\ge 0$. 9.995 request đến trễ sẽ nhận về $< 0$.
-   - **Fail-fast:** 9.995 request bị từ chối ngay lập tức, API trả về `HTTP 400 Out of stock`. Frontend của 9.995 người này tắt spinner và hiện popup "Đã hết hàng". *Tại sao không nhét hàng đợi (Queue) vào bước này?* Vì nếu tống cả 10.000 request vào Queue, hệ thống lãng phí I/O vô ích, và người thứ 10.000 sẽ phải đợi xoay spinner 5 phút chỉ để nhận tin "Hết hàng".
+   - 10.000 request đập vào API. Backend gọi Lua Script trên Redis truyền vào tham số `requested_qty` (số lượng người dùng muốn mua).
+   - **Bài toán mua nhiều sản phẩm:** Giả sử Tồn kho = 5. Do Redis chạy Single-threaded, nó sẽ quét tuần tự từng request bằng Lua Script một cách nguyên tử:
+     - Request 1 mua **1** cái $\rightarrow$ Tồn kho còn 4 (Thành công).
+     - Request 2 mua **2** cái $\rightarrow$ Tồn kho còn 2 (Thành công).
+     - Request 3 mua **3** cái $\rightarrow$ Yêu cầu 3 > 2 (tồn kho hiện tại) $\rightarrow$ **Thất bại** (Bị văng lỗi Hết hàng ngay lập tức dù xếp hàng sớm).
+     - Request 4 mua **1** cái $\rightarrow$ Tồn kho còn 1 (Thành công).
+     - Request 5 mua **1** cái $\rightarrow$ Tồn kho còn 0 (Thành công).
+     - Request 6 đến 10.000 (dù mua 1 hay nhiều) $\rightarrow$ Tồn kho không đủ $\rightarrow$ Thất bại.
+   - **Fail-fast:** Hàng ngàn request không thỏa mãn (như Request 3 và từ 6-10.000) bị từ chối ngay lập tức tại RAM. API trả về `HTTP 400 Out of stock`. Frontend tắt spinner và hiện popup "Đã hết hàng". *Tại sao không nhét hàng đợi (Queue) vào bước này?* Vì nếu tống cả 10.000 request vào Queue, hệ thống lãng phí I/O vô ích, và người thứ 10.000 sẽ phải đợi xoay spinner 5 phút chỉ để nhận tin "Hết hàng".
 3. **Message Queue (RabbitMQ):** 
-   - Đúng 5 người may mắn cầm được "vé" đi qua màng lọc Redis. Backend đóng gói thông tin 5 người này thành 5 Message `OrderRequest` và đẩy vào RabbitMQ.
-   - API ngay lập tức trả về `HTTP 202 Accepted` cho 5 người này. Màn hình của họ tiếp tục xoay vòng chờ đợi, không lo bị HTTP Timeout.
+   - Ở kịch bản trên, có **4 người** may mắn (tổng số lượng mua là 5) đi qua được màng lọc Redis. Backend đóng gói thông tin 4 người này thành 4 Message `OrderRequest` và đẩy vào RabbitMQ.
+   - API ngay lập tức trả về `HTTP 202 Accepted` cho 4 người này. Màn hình của họ tiếp tục xoay vòng chờ đợi, không lo bị HTTP Timeout.
 4. **Worker & Database (Khóa/Trừ kho Source of Truth & Rollback):** 
    - Một hoặc nhiều Background Worker móc từng Message ra khỏi Queue để bắt đầu xử lý nghiệp vụ phức tạp (tạo mã đơn, kiểm tra tài khoản, mã giảm giá...).
-   - **Trừ kho DB (Chốt đơn thật):** Thực thi lệnh SQL Optimistic Locking (`UPDATE Product SET Stock = Stock - 1 WHERE Id = @Id AND Stock >= 1`). Đây mới là bước **ghi chép vĩnh viễn (Source of Truth)**. Việc kiểm tra `Stock >= 1` lại một lần nữa ở DB giúp tránh lỗi mâu thuẫn hệ thống.
-   - **Cơ chế Rollback (Compensation):** Nếu việc ghi CSDL của 1 trong 5 người bị thất bại (do user bị chặn, lỗi kết nối DB, nghiệp vụ khác không thoả mãn...), Worker bắt buộc phải gọi lệnh `INCR` (cộng thêm 1) trả lại tồn kho vào Redis để "nhả vé". Lúc này người tiếp theo (nếu ứng dụng có cơ chế queue chờ hoặc user f5 bấm lại) sẽ có cơ hội mua lại sản phẩm bị rớt này.
+   - **Trừ kho DB (Chốt đơn thật):** Thực thi lệnh SQL Optimistic Locking (`UPDATE Product SET Stock = Stock - @Qty WHERE Id = @Id AND Stock >= @Qty`). Đây mới là bước **ghi chép vĩnh viễn (Source of Truth)**. Việc kiểm tra `Stock >= @Qty` một lần nữa ở DB giúp tránh lỗi bất đồng bộ.
+   - **Cơ chế Rollback (Compensation):** Nếu việc ghi CSDL của bất kỳ người nào bị thất bại (do user bị chặn, lỗi kết nối DB...), Worker bắt buộc phải gọi lệnh `INCRBY` trả lại đúng số lượng người đó định mua vào Redis để "nhả vé". Lúc này tồn kho nảy số lại, người đến sau sẽ có cơ hội mua tiếp.
 5. **Backend trả ngược Frontend (SignalR WebSockets):**
    - Chỉ khi nào CSDL báo `RowsAffected = 1` (nghiệp vụ chính thức hoàn tất), Worker mới gọi SignalR Hub bắn một sự kiện chứa kết quả xuống đúng `ConnectionId` của người mua.
    - Trình duyệt bắt được event, tắt spinner, báo "Tạo đơn thành công" và redirect đến cổng thanh toán.
