@@ -368,3 +368,29 @@ Máy in tem dán ly ở quán hết giấy hoặc bị kẹt. App nhà bếp ké
 ### Tổng kết
 - **Redis Streams:** Đóng vai trò như một **"Lưới lọc rác siêu tốc"**, đứng ngay sau API để hứng chịu bão traffic cho các nghiệp vụ chớp nhoáng (Flash Sale).
 - **RabbitMQ:** Đóng vai trò là **"Trái tim vận hành" (Backbone)**. Mọi luồng xử lý kinh doanh cốt lõi (Pha chế, Giao hàng, Tích điểm, Thanh toán) đều phải đi qua RabbitMQ để đảm bảo tính toàn vẹn dữ liệu (Durability), không bao giờ mất đơn và dễ dàng phục hồi khi nhà hàng gặp sự cố phần cứng/mạng.
+
+---
+
+## Phụ Lục 3: Khi nào hệ thống Monolith (Nguyên khối) BẮT BUỘC phải dùng RabbitMQ?
+
+Rất nhiều đội ngũ lạm dụng RabbitMQ / Kafka cho dự án Monolith theo trend mà không biết rằng đang làm phức tạp hóa hệ thống. Thực tế, bạn hoàn toàn có thể dùng cấu trúc dữ liệu trên RAM (như `Channel<T>`) hoặc thư viện chạy ngầm (như **Hangfire**, **Quartz.NET**) để giải quyết các bài toán hàng đợi thông thường.
+
+Tuy nhiên, **RabbitMQ sẽ trở thành BẮT BUỘC (Mandatory)** ngay cả trong thiết kế Monolith khi hệ thống chạm tới 3 giới hạn "tử huyệt" sau:
+
+### 1. Chống mất dữ liệu khi App Pool Recycle (Server Restart/Crash)
+Nếu bạn dùng `Channel<T>` hoặc `Task.Run` trong Monolith, dữ liệu nằm hoàn toàn trên RAM của tiến trình Web Server (w3wp.exe hoặc Kestrel).
+- Ở môi trường Production, IIS/Kestrel có thể tự động Restart/Recycle định kỳ, hoặc bị crash do tải nặng.
+- **Hậu quả:** Toàn bộ các tác vụ đang chờ trong RAM (như gửi email hóa đơn, trừ tiền, cập nhật trạng thái) sẽ bốc hơi vĩnh viễn. 
+- **Bắt buộc dùng RabbitMQ:** Vì nó là một tiến trình (Process) độc lập nằm ngoài Monolith và lưu dữ liệu an toàn xuống Ổ cứng (Disk). Dù ứng dụng Web có sập và khởi động lại, message vẫn nằm an toàn trong RabbitMQ chờ Worker kéo về chạy tiếp.
+
+### 2. Tương tác với Third-party (Bên thứ 3) thiếu ổn định
+Giả sử Monolith có tính năng: *"Khi user đăng ký thành công, gọi API sang VNPay để tạo ví, và gọi API sang SendGrid để gửi Email"*.
+- Nếu lúc đó SendGrid bị sập hoặc mạng bị đứt, luồng code của bạn sẽ văng Exception.
+- Nếu bạn xử lý Retry bằng vòng lặp `while` hoặc `Thread.Sleep` ngay trong Web API, bạn sẽ block luồng HTTP đó, làm cạn kiệt ThreadPool khiến Monolith không nhận được request của người dùng khác.
+- **Bắt buộc dùng RabbitMQ:** Web API chỉ cần ném lệnh "Gửi Email" vào RabbitMQ rồi trả kết quả HTTP 200 cho User ngay lập tức. Worker chạy ngầm sẽ kéo lệnh ra xử lý. Nếu SendGrid sập, RabbitMQ sẽ tự dùng tính năng **Dead Letter Queue / Retry** để thử gửi lại 10 phút một lần cho đến khi thành công. Web API hoàn toàn rảnh tay.
+
+### 3. Tải nặng (Heavy I/O) đe dọa trực tiếp đến luồng Web API
+Dù là Monolith, bạn vẫn có thể tách hệ thống thành 2 cục chạy chung Database: `Web API (nhận request)` và `Worker Service (xử lý ngầm)`.
+- Giả sử có chức năng: *Xuất báo cáo Excel doanh thu 10 năm của công ty (mất 5 phút xử lý CPU và RAM cho 1 báo cáo).*
+- Nếu 10 người cùng bấm xuất báo cáo, CPU của Server Monolith sẽ giật lên 100%, RAM cạn kiệt. Hậu quả là hàng ngàn khách hàng khác đang lướt web sẽ bị quay vòng vòng (Timeout) vì Web Server không còn tài nguyên để phản hồi.
+- **Bắt buộc dùng RabbitMQ:** Lúc này nó đóng vai trò là "Cái van giảm áp" (Buffer). 10 request nặng kia sẽ nằm ngoan ngoãn trong RabbitMQ. Background Worker sẽ kéo ra xử lý **từng cái một tuần tự** (`PrefetchCount = 1`). Hệ thống có thể mất 50 phút để hoàn thành cho cả 10 người, nhưng Web API vẫn nhẹ tênh, trơn tru phục vụ khách lướt web bình thường.
