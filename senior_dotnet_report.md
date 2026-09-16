@@ -312,3 +312,25 @@ Với Flash Sale thông thường, sự đảo lộn vài mili-giây này không
       await _redisDb.StreamAcknowledgeAsync("order_stream:product:1", "OrderProcessingGroup", msg.Id);
   }
   ```
+
+---
+
+## Phụ Lục: Phân tích đánh đổi (Trade-offs) giữa Redis Streams và RabbitMQ
+
+Sự xuất hiện của **Redis Streams** làm lu mờ ranh giới giữa Cache và Message Queue. Trong các câu hỏi phỏng vấn System Design, việc quyết định chọn công cụ nào thể hiện tư duy thiết kế thực chiến của một Senior/Architect.
+
+### `redisDb.Stream` hoạt động thế nào?
+Nó là một cấu trúc dữ liệu dạng **Append-only Log** (tương tự kiến trúc của Apache Kafka). 
+- Hỗ trợ **Consumer Group**: Cho phép scale ra nhiều Worker. Redis đảm bảo mỗi Message chỉ được phân phối cho đúng 1 Worker trong nhóm.
+- Quản lý trạng thái: Khi Worker lấy Message, nó chưa bị xóa mà rơi vào trạng thái Pending (PEL). Chỉ khi Worker xử lý xong CSDL và gọi `StreamAcknowledgeAsync` (ACK), message mới thực sự được đánh dấu hoàn thành.
+- Cứu hộ (Fault Tolerance): Nếu Worker bị crash giữa chừng, hệ thống có thể chạy các lệnh `XPENDING` và `XCLAIM` để nhặt message bị kẹt và giao cho Worker khác xử lý tiếp.
+
+### Bảng So Sánh Quyết Định (Architecture Decision)
+
+| Tiêu chí | Redis Streams | RabbitMQ |
+| :--- | :--- | :--- |
+| **Bản chất lưu trữ** | In-Memory (RAM) - Cực nhanh nhưng đắt đỏ. Dễ làm sập toàn hệ thống (OOM) nếu queue bị nghẽn (buộc phải dùng cờ `MAXLEN`). | Disk-based - Chậm hơn một chút nhưng an toàn và lưu trữ siêu rẻ cho hàng triệu messages dồn ứ. |
+| **Độ trễ mạng & Thứ tự** | **Zero Network Latency** nếu gọi `XADD` ngay trong Lua Script. Đảm bảo **Strict FIFO** (thứ tự tuyệt đối 100%). | Bị ảnh hưởng bởi Network Latency khi API bắn message qua. Có thể làm đảo lộn thứ tự (Race Condition). |
+| **Định tuyến (Routing)** | Đơn giản, dạng ống thẳng đuột (Log). | Rất mạnh mẽ với hệ thống Exchange (Direct, Topic, Fanout). Dễ dàng định tuyến: *1 message ném vào 3 queue khác nhau*. |
+| **Xử lý lỗi (DLQ & Retry)**| Dev phải tự code tay hoàn toàn logic xử lý retry (`XPENDING`, `XCLAIM`). | Hỗ trợ Native: Tự động đếm số lần fail và đẩy sang Dead Letter Queue (DLQ) cực kỳ tiện lợi. |
+| **Tình huống khuyên dùng**| Flash Sale, Event Sourcing, nơi cần **tốc độ siêu tốc**, gom chung Infrastructure (dùng ké Redis) và cần **Strict FIFO**. | Hệ thống Enterprise Microservices, chia tách nghiệp vụ đa luồng, cần định tuyến phức tạp và lưu trữ an toàn cao nhất. |
