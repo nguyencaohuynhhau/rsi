@@ -357,6 +357,12 @@ Với Flash Sale thông thường, sự đảo lộn vài mili-giây này không
   public record BuyProductRequest(int ProductId, int UserId, int Quantity);
   ```
 
+  **💡 Lưu ý kiến trúc về kiểu `IDatabase` (StackExchange.Redis):**
+  Nhiều lập trình viên lầm tưởng `IDatabase` giống như `DbContext` của Entity Framework hay `SqlConnection`, dẫn đến việc quản lý vòng đời sai lệch. Dưới góc độ Senior, bạn cần nắm rõ bản chất của nó:
+  - **Lightweight Object (Vô cùng nhẹ):** Dù mang tên là `IDatabase`, nó không tốn chi phí khởi tạo. Nó chỉ là một lớp trừu tượng (pass-through wrapper) để trỏ đến một logical database (ví dụ: DB 0) trên Redis.
+  - **Không mở kết nối mạng mới:** Gọi `redis.GetDatabase()` **không** tạo ra kết nối TCP mới. Nó tái sử dụng chung đường ống kết nối mạng (Multiplexer) duy nhất của `IConnectionMultiplexer`.
+  - **Thread-safe tuyệt đối:** Lớp này hoàn toàn an toàn khi gọi từ hàng nghìn luồng (Thread-safe) cùng lúc. Tuyệt đối **không** gọi `.Dispose()` hay bọc trong khối `using`. Việc tiêm (inject) qua Controller (như code trên) hay dùng dưới dạng Singleton đều tối ưu và không bao giờ gây rò rỉ kết nối mạng (Socket Leak).
+
 #### Tại sao Redis có thể chặn đứng 999.999 request cùng lúc mà không bị Race Condition?
 Để hiểu được tại sao Redis có thể chặn đứng hàng trăm ngàn request một cách chính xác tuyệt đối mà không bị nhầm lẫn, chúng ta cần nhìn sâu vào **bản chất kiến trúc lõi (Core Architecture)** của Redis.
 
