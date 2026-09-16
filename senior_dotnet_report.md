@@ -394,3 +394,188 @@ Dù là Monolith, bạn vẫn có thể tách hệ thống thành 2 cục chạy
 - Giả sử có chức năng: *Xuất báo cáo Excel doanh thu 10 năm của công ty (mất 5 phút xử lý CPU và RAM cho 1 báo cáo).*
 - Nếu 10 người cùng bấm xuất báo cáo, CPU của Server Monolith sẽ giật lên 100%, RAM cạn kiệt. Hậu quả là hàng ngàn khách hàng khác đang lướt web sẽ bị quay vòng vòng (Timeout) vì Web Server không còn tài nguyên để phản hồi.
 - **Bắt buộc dùng RabbitMQ:** Lúc này nó đóng vai trò là "Cái van giảm áp" (Buffer). 10 request nặng kia sẽ nằm ngoan ngoãn trong RabbitMQ. Background Worker sẽ kéo ra xử lý **từng cái một tuần tự** (`PrefetchCount = 1`). Hệ thống có thể mất 50 phút để hoàn thành cho cả 10 người, nhưng Web API vẫn nhẹ tênh, trơn tru phục vụ khách lướt web bình thường.
+
+---
+
+## Phụ Lục 4: Giải quyết các bài toán Concurrency & Race Condition trong Monolith (Hỏi - Đáp Phỏng Vấn)
+
+Dù là hệ thống nguyên khối (Monolith), các bài toán về Concurrency (đồng thời) vẫn luôn hiện diện và là ranh giới phân biệt giữa một Junior và một Senior Developer. Dưới đây là cách một Senior xử lý các vấn đề tương tự Race Condition trong môi trường .NET.
+
+### Q1: Trong ASP.NET Core, nếu bạn có một biến toàn cục (global state) hoặc dùng một Singleton Service để đếm số lượng request, bạn xử lý concurrent requests như thế nào để tránh Race Condition?
+**Trả lời:**
+- **Không dùng biến `int` thông thường:** Vì toán tử `count++` không phải là Thread-safe (nó bao gồm 3 bước: Read, Increment, Write). Nếu 2 threads cùng gọi, dữ liệu sẽ bị ghi đè (Race Condition).
+- **Giải pháp cơ bản:** Sử dụng `Interlocked.Increment(ref _counter)` cho thao tác nguyên thủy (atomic) ở mức CPU. 
+- **Với cấu trúc dữ liệu phức tạp:** Dùng `ConcurrentDictionary` hoặc từ khóa `lock` (nhưng phải cẩn thận vì `lock` làm nghẽn luồng xử lý và giảm throughput).
+- **Tư duy Senior (Stateless):** Khuyên không nên lưu state trong bộ nhớ của Web Server. Web API nên là Stateless. Hãy đẩy các biến đếm hoặc trạng thái này ra ngoài (VD: dùng Redis `INCR` hoặc Database) để dễ dàng Scale-out ứng dụng ra nhiều server sau này mà không bị sai lệch số liệu.
+
+### Q2: Hai người dùng (Admin) cùng sửa một bài viết hoặc cùng cập nhật một bản ghi trong Database. Làm sao để giải quyết Data Concurrency trong Entity Framework Core?
+**Trả lời:**
+Tuyệt đối không dùng Khóa bi quan (Pessimistic Locking - ví dụ `SELECT ... FOR UPDATE`) trong Web API vì nó sẽ giam (lock) record ở Database trong suốt thời gian người dùng thao tác trên màn hình, dễ gây Deadlock và sập DB.
+- **Giải pháp (Khóa lạc quan - Optimistic Concurrency):**
+  - Thêm một cột `RowVersion` (byte array) vào Table và đánh dấu là `[Timestamp]` trong EF Core (hoặc cấu hình `.IsRowVersion()`).
+  - Khi Admin A và Admin B cùng mở trang Edit, cả 2 đều tải về `RowVersion` hiện tại (VD: `0x01`).
+  - Admin A lưu trước, EF Core phát sinh câu lệnh: `UPDATE ... WHERE Id = 1 AND RowVersion = 0x01`. Lệnh thành công, DB tự động sinh ra `RowVersion` mới (`0x02`).
+  - Admin B lưu sau, EF Core phát sinh: `UPDATE ... WHERE Id = 1 AND RowVersion = 0x01`. Lúc này `0x01` không còn khớp với DB nữa $\rightarrow$ Câu lệnh tác động 0 dòng. 
+  - EF Core sẽ ném ra lỗi `DbUpdateConcurrencyException`. 
+  - Backend bắt lỗi này và báo cho Admin B: *"Dữ liệu đã bị người khác thay đổi trước đó, vui lòng tải lại trang"*.
+
+### Q3: Do mạng lag, User bấm nút "Thanh toán" 3 lần liên tục. Hệ thống Monolith làm sao để tránh việc gọi trừ tiền 3 lần (Double Submit / Idempotency)?
+**Trả lời:**
+Đây là bài toán kinh điển về **Idempotency** (Tính lũy đẳng - thực hiện n lần kết quả vẫn như 1 lần). Không thể chỉ chặn ở Frontend (disable nút bấm) vì User có thể dùng Postman hoặc rớt mạng dẫn đến Retry tự động.
+- **Giải pháp (Idempotency Key):**
+  1. Khi vào trang Thanh toán, Frontend tự sinh ra một chuỗi UUID (VD: `Idemp-Key-123`) và gửi kèm trên HTTP Header (`X-Idempotency-Key`).
+  2. Backend nhận được request, lấy `Idemp-Key-123` chèn vào một bảng `IdempotencyRecords` (hoặc Redis) có ràng buộc duy nhất (Unique Constraint) và đặt Status là `Processing`.
+  3. **Lần bấm thứ 1:** Key chưa tồn tại $\rightarrow$ Backend cho đi tiếp để gọi API trừ tiền.
+  4. **Lần bấm thứ 2 & 3 (chạy song song):** DB/Redis báo lỗi trùng Key $\rightarrow$ Backend biết ngay request đang bị duplicate.
+     - Nếu Key đang ở trạng thái `Processing`: Trả về lỗi 409 Conflict hoặc 400 (Yêu cầu khách hàng chờ).
+     - Nếu Key đang ở trạng thái `Completed` (Lần 1 đã thành công): Backend bỏ qua bước trừ tiền, lấy thẳng kết quả thành công cũ trong DB trả về luôn cho lần bấm thứ 2 và 3.
+
+### Q4: Hệ thống bị "Cache Stampede" (Bão Cache / Bão Thủng Cache) khi một Key dữ liệu trên Redis bị hết hạn (Expired). Hàng ngàn request đồng loạt truy vấn DB để tạo lại Cache. Làm sao để xử lý?
+**Trả lời:**
+Nếu key bị hết hạn đúng lúc có 5.000 người truy cập, cả 5.000 thread sẽ cùng thấy Cache Miss và đồng loạt phi thẳng vào Database để Query. DB sẽ sập ngay lập tức.
+- **Cách 1: Khóa phân tán (Distributed Lock) / SemaphoreSlim**
+  - Trong Monolith 1 server, ta dùng `SemaphoreSlim` để tạo cơ chế Lock Async.
+  - Khi phát hiện Cache Miss, 5.000 luồng phải đi qua một cái "cửa hẹp". Chỉ cho phép **Đúng 1 luồng** được lọt qua để chạy Query xuống DB và nạp lại Cache.
+  - 4.999 luồng còn lại bị bắt đứng đợi (Wait). Khi luồng 1 nạp Cache xong, 4.999 luồng kia được thả ra thì dữ liệu đã có sẵn trên RAM, không ai xuống DB nữa.
+- **Cách 2: Cập nhật Cache ngầm (Background Refresh - Không dùng TTL)**
+  - Thay vì set thời gian sống (TTL) cho Cache để nó tự biến mất, ta cho Cache sống vĩnh viễn (No Expiration).
+  - Viết một Worker Service (Cronjob) chạy ngầm định kỳ (VD: 5 phút/lần) query Database và đắp đè lên Redis.
+  - Với cách này, dữ liệu trên Redis có thể bị cũ (Stale data) tối đa 5 phút, nhưng Server Web và Database được an toàn tuyệt đối khỏi bão traffic.
+
+### Q5: Có một `BackgroundService` (hoặc Cronjob) được cấu hình chạy 1 phút một lần để quét Database và gửi Email. Nhưng vào giờ cao điểm, việc gửi Email mất tới 3 phút. Điều gì sẽ xảy ra và làm sao để khắc phục sự cố chồng chéo này?
+**Trả lời:**
+- **Vấn đề (Task Overlapping):** Ở phút thứ 1, Job A bắt đầu chạy. Ở phút thứ 2, Job A vẫn đang miệt mài gửi email nhưng Job B lại được hệ thống kích hoạt (trigger). Lúc này 2 luồng cùng quét ra chung 1 tập khách hàng trong DB và hậu quả là khách hàng bị nhận 2-3 email rác (Spam).
+- **Giải pháp:**
+  - **Nếu dùng thư viện (Hangfire / Quartz.NET):** Chỉ cần thêm Attribute `[DisableConcurrentExecution]` trên đầu hàm Job. Thư viện sẽ tự động quản lý distributed lock để chặn Job B chạy nếu Job A chưa xong.
+  - **Nếu dùng `BackgroundService` thuần của .NET:** Sử dụng `SemaphoreSlim(1, 1)`. Trong hàm `ExecuteAsync`, gọi `await _semaphore.WaitAsync(0)`. Hàm này kiểm tra xem nếu đang có luồng giữ khóa thì trả về `false` ngay lập tức, ta sẽ bỏ qua (skip) luôn chu kỳ của phút thứ 2, đợi đến phút thứ 3 mới thử lại.
+  - **Kiểm soát ở Database:** Cập nhật ngay cột `Status = 'Processing'` cho những record lấy ra được (dùng truy vấn nguyên tử `UPDATE TOP (100) ... OUTPUT ... WHERE Status = 'Pending'`), giúp luồng thứ 2 không lấy trúng những email đang được xử lý.
+
+### Q6: Bạn cần khởi tạo một Model AI (mất 5 giây) hoặc một cấu hình nặng vào RAM lần đầu tiên Web khởi động. Làm sao để khi 100 request đầu tiên ập tới, hệ thống không gọi hàm khởi tạo này 100 lần (Race Condition trong RAM)?
+**Trả lời:**
+- **Vấn đề (Lazy Initialization Race Condition):** Rất nhiều lập trình viên viết code theo kiểu: `if (_model == null) { _model = LoadHeavyModel(); }`. Nếu 100 threads cùng lọt qua check `null` lúc đầu, hàm `LoadHeavyModel()` sẽ bị thực thi 100 lần, gây vắt kiệt RAM và CPU.
+- **Giải pháp (Dùng lớp `Lazy<T>`):**
+  - Trong .NET, cách chuẩn mực và thanh lịch nhất để khóa Single-Thread cho việc khởi tạo là dùng `Lazy<T>`.
+  - Cú pháp: `private static readonly Lazy<HeavyModel> _lazyModel = new Lazy<HeavyModel>(() => LoadHeavyModel(), LazyThreadSafetyMode.ExecutionAndPublication);`
+  - Khi 100 threads cùng gọi thuộc tính `_lazyModel.Value`, .NET sẽ đảm bảo đoạn delegate `LoadHeavyModel()` chỉ được thực thi **Đúng 1 lần duy nhất**. 99 threads còn lại sẽ tự động bị Lock và đứng chờ. Sau 5 giây, tất cả 100 threads sẽ cùng nhận được 1 object duy nhất đã khởi tạo xong.
+
+### Q7: Trong kiến trúc nguyên khối, khi User thanh toán xong, bạn cần (1) Lưu vào CSDL và (2) Bắn Message vào RabbitMQ để kho xuất hàng. Làm sao để xử lý rủi ro bất đồng bộ giữa DB và hệ thống bên ngoài?
+**Trả lời:**
+- **Vấn đề (Dual Write / Race Condition với hệ thống ngoài):** Bạn không thể gộp thao tác CSDL và lệnh gọi qua RabbitMQ vào chung 1 cái `TransactionScope`. 
+  - Nếu gửi RabbitMQ lỗi $\rightarrow$ DB rollback $\rightarrow$ Hệ thống an toàn.
+  - Nếu gửi RabbitMQ thành công, nhưng lúc DB commit bị lỗi (rớt mạng phút chót, timeout) $\rightarrow$ RabbitMQ đã báo xuất kho nhưng DB báo khách chưa trả tiền $\rightarrow$ **Thảm họa**.
+- **Giải pháp (Transactional Outbox Pattern):**
+  - **KHÔNG** bắn tin nhắn trực tiếp qua RabbitMQ trong luồng của Web API.
+  - Tạo một bảng thứ hai trong CSDL tên là `OutboxMessages`.
+  - Gộp thao tác (1) Cập nhật trạng thái Đơn hàng và (2) Thêm một bản ghi vào bảng `OutboxMessages` vào chung 1 cái DbContext Transaction. Vì chúng nằm chung 1 Database SQL nên tính ACID được đảm bảo 100% (Thành công cùng thành công, lỗi cùng rollback).
+  - Viết một **Background Worker** chạy ngầm, liên tục quét bảng `OutboxMessages`. Nếu thấy có tin nhắn mới, Worker sẽ lấy ra, gửi sang RabbitMQ. Gửi thành công thì xóa dòng đó trong bảng (hoặc update `IsProcessed = true`).
+  - Thiết kế này tuân thủ nguyên lý **At-least-once delivery**, đảm bảo không bao giờ có sự sai lệch trạng thái giữa DB và RabbitMQ.
+
+---
+
+## Phụ Lục 5: Những "Sát Thủ Vô Hình" Khác Mà Doanh Nghiệp Hay Mắc Phải & Cách Senior Giải Quyết
+
+Bên cạnh Concurrency và Race Condition, các hệ thống khi vận hành thực tế (Go-live) thường bị đánh sập hoặc giảm hiệu năng bởi những nguyên nhân rất ngớ ngẩn nhưng phổ biến. Dưới đây là 3 "sát thủ" hàng đầu và cách Senior Developer ứng phó.
+
+### Q8: Bài toán N+1 Query - Kẻ giết chết hiệu năng âm thầm trong Entity Framework Core
+**Vấn đề doanh nghiệp hay mắc:**
+- Lập trình viên viết câu lệnh LINQ truy vấn lấy ra danh sách 100 Đơn hàng, sau đó dùng vòng lặp `foreach` chạy qua từng đơn hàng, và gọi `.Customer.Name` để in ra tên người dùng.
+- **Hậu quả:** Ở môi trường Local dữ liệu ít thì chạy mất 10ms. Lên Production, EF Core sinh ra 1 câu query lấy đơn hàng, và 100 câu query nhỏ bắn liên tục vào Database để lấy tên Customer. Mạng nội bộ phải chịu 101 vòng lặp network round-trip. Nếu có 1000 người vào trang, DB sẽ bị dội bom bởi hàng triệu câu Query vô nghĩa và sập hoàn toàn.
+
+**Giải pháp của Senior:**
+- **Sửa mã:** Sử dụng Eager Loading bằng cách thêm `.Include(x => x.Customer)` vào câu LINQ ngay từ đầu. EF Core sẽ tự động dùng SQL `JOIN` để gom tất cả lại thành 1 câu truy vấn duy nhất.
+- **Tối ưu cực đại (Projection):** Đôi khi `Include` kéo theo quá nhiều cột thừa mứa. Senior sẽ dùng `.Select()` để map thẳng vào DTO: `.Select(o => new OrderDto { Id = o.Id, CustomerName = o.Customer.Name })`. Câu SQL sinh ra cực kỳ sạch và chỉ lấy đúng 2 cột.
+- **Phòng bệnh hơn chữa bệnh:** Cấu hình EF Core trong `Startup.cs` để tự động văng lỗi (Exception) ngay lúc code nếu phát hiện truy vấn N+1:
+  `options.ConfigureWarnings(w => w.Throw(RelationalEventId.MultipleCollectionIncludeWarning));`
+
+### Q9: Bài toán Bão Retry (Thundering Herd) làm sập hệ thống đối tác
+**Vấn đề doanh nghiệp hay mắc:**
+- Khi hệ thống A gọi API sang hệ thống B (VD: cổng thanh toán VNPay) bị Timeout, Junior Dev thường dùng thư viện Polly để set cấu hình: *"Retry 3 lần, mỗi lần cách nhau 1 giây"*.
+- **Hậu quả:** Giả sử hệ thống B bị sập mạng trong 3 giây. Lúc này có 5.000 user đang cố thanh toán ở hệ thống A. Khi B vừa ngoi lên lại, nó lập tức hứng chịu 15.000 requests (dội bom) cùng một lúc (do các thread của A đang chờ đủ 1s là nã đạn). B lại tiếp tục sập vĩnh viễn không thể ngóc đầu lên nổi.
+
+**Giải pháp của Senior:**
+- **Exponential Backoff with Jitter (Giãn cách theo cấp số nhân có nhiễu):**
+  - Không bao giờ retry vào những khoảng thời gian cố định. Phải set thời gian chờ tăng dần: 2s, 4s, 8s.
+  - **Jitter (Nhiễu ngẫu nhiên):** Cộng thêm một khoảng thời gian random (từ 100ms đến 500ms) vào mỗi lần chờ của từng user. Điều này giúp phân tán đều 15.000 requests ra một phổ thời gian rộng hơn, không bắn cùng lúc vào một thời điểm $\rightarrow$ Cứu sống hệ thống B.
+- **Circuit Breaker (Cầu dao tự ngắt):**
+  - Cấu hình Polly: Nếu phát hiện API của B lỗi 5 lần liên tiếp, tự động "Cụp cầu dao" (Open Circuit).
+  - Mọi request tiếp theo gọi sang B sẽ bị hệ thống A chặn ngay lập tức ở RAM và trả về lỗi `503 Service Unavailable`, không cho bay qua mạng nữa.
+  - Chờ 1 phút sau, hệ thống A hé cầu dao lên (Half-Open), thả 1 request chạy qua xem B đã sống lại chưa. Nếu sống thì bật lại cầu dao bình thường.
+
+### Q10: Socket Exhaustion (Cạn kiệt cổng mạng) do `HttpClient`
+**Vấn đề doanh nghiệp hay mắc:**
+- Lập trình viên viết hàm gọi API bằng cách: `using (var client = new HttpClient()) { await client.GetAsync(...); }`.
+- Nghĩ rằng dùng lệnh `using` thì nó sẽ giải phóng bộ nhớ. 
+- **Hậu quả:** `HttpClient` đóng connection trên RAM, nhưng ở tầng hệ điều hành (OS), cổng mạng (TCP Socket) bị rơi vào trạng thái `TIME_WAIT` và mất từ 1 đến 4 phút để OS thực sự thu hồi. Nếu hệ thống có 1.000 request/giây, chỉ chưa đầy 1 phút server sẽ cạn sạch cổng mạng (khoảng 65.000 cổng) và văng lỗi `SocketException` trên toàn Server.
+
+**Giải pháp của Senior:**
+- Không bao giờ khởi tạo `new HttpClient()` thủ công trong ASP.NET Core.
+- **Sử dụng `IHttpClientFactory`:** Đăng ký trong DI container (`services.AddHttpClient()`). Factory sẽ tự động quản lý một Connection Pool bên dưới. Nó tái sử dụng (reuse) các socket đang mở thay vì liên tục tạo mới, giữ cho số lượng cổng mạng duy trì ở mức cực kỳ thấp dù traffic có bùng nổ đến đâu.
+
+### Q11: Thread Pool Starvation (Ngạt thở Thread Pool) do Sync-over-Async
+**Vấn đề doanh nghiệp hay mắc:**
+- Lập trình viên gọi một hàm `Async` (ví dụ: `GetUserDataAsync()`) từ một hàm đồng bộ, nhưng vì lười sửa lại chữ ký hàm thành `async/await`, họ gõ thêm `.Result` hoặc `.Wait()` vào cuối.
+- **Hậu quả:** Khi gọi `.Result`, luồng (thread) hiện tại xử lý HTTP Request của Web Server bị khóa cứng (Block) chỉ để đứng chờ kết quả. Trong khi đó, hàm bên trong lại cần mượn 1 thread khác từ Thread Pool để chạy tác vụ I/O. Nếu có 1000 request ập tới, toàn bộ luồng trong Thread Pool sẽ bị block sạch. Server treo cứng, CPU ở mức 0%, RAM trống rỗng nhưng ứng dụng không thể nhận thêm bất kỳ request nào nữa (Deadlock / Starvation).
+
+**Giải pháp của Senior:**
+- **Tuyệt đối tuân thủ "Async all the way":** Từ Controller xuống tận Repository, mọi hàm liên quan đến I/O đều phải trả về `Task` và sử dụng từ khóa `await`. Không bao giờ được trộn lẫn giữa Sync và Async.
+- Trong trường hợp bất khả kháng phải gọi hàm Async từ một hàm Sync (như trong Constructor hoặc Background Worker cũ), tuyệt đối không dùng `.Result`. Hãy cấu trúc lại code, hoặc dùng `Task.Run(() => GetUserDataAsync()).GetAwaiter().GetResult()` một cách hết sức cẩn trọng để tách biệt luồng, tránh giam giữ luồng chính.
+
+### Q12: Cạn kiệt Connection Pool CSDL do "Giam" Transaction quá lâu
+**Vấn đề doanh nghiệp hay mắc:**
+- Lập trình viên mở một Database Transaction (`using var transaction = dbContext.Database.BeginTransaction();`) để chuẩn bị lưu Đơn hàng.
+- Nửa chừng trong Transaction đó, họ gọi một HTTP API sang hệ thống bên thứ 3 (như VNPay hoặc Giao Hàng Nhanh) để lấy mã giao dịch. Nhưng mạng bên kia bị lag mất 10 giây.
+- **Hậu quả:** Kết nối (Connection) tới CSDL SQL Server bị "giam" vô ích trong suốt 10 giây đó. Nếu có 200 user cùng đặt hàng, 200 connection trong Pool bị giữ chặt. Người thứ 201 sẽ nhận ngay lỗi *“Timeout expired. The timeout period elapsed prior to obtaining a connection from the pool”* và ứng dụng sập, mặc dù Database đang cực kỳ rảnh rỗi.
+
+**Giải pháp của Senior:**
+- **Nguyên tắc Vàng:** *Database Transaction phải được giữ ngắn nhất có thể (Short-lived).* Tuyệt đối không bao giờ thực hiện các lệnh gọi I/O ra bên ngoài (gọi API, gửi Email, đọc file) bên trong một Database Transaction.
+- **Thiết kế lại luồng:** 
+  1. Gọi API đối tác lấy mã giao dịch trước (Không mở Transaction). 
+  2. Khi có kết quả thành công $\rightarrow$ Mở Transaction $\rightarrow$ Lưu Database (chỉ mất 5ms) $\rightarrow$ Commit. 
+
+### Q13: Xử lý sai thứ tự (Out-of-order) Message trong Hệ thống Phân tán
+**Vấn đề doanh nghiệp hay mắc:**
+- Khách hàng đổi tên 2 lần liên tục: Lần 1 đổi thành "Nam", Lần 2 đổi thành "Hải". API ném 2 message `UpdateProfile` vào RabbitMQ / Kafka.
+- Hệ thống có 5 Worker đang chạy song song để consume Queue. Do độ trễ mạng, Worker 2 lấy message "Hải" ra xử lý và lưu CSDL xong trước. Sau đó Worker 1 mới lưu message "Nam" đè lên CSDL.
+- **Hậu quả:** Khách hàng đổi tên lần 2 là "Hải" nhưng khi load lại trang thì thấy tên cũ "Nam". Hệ thống bất đồng bộ và sai lệch dữ liệu phân tán.
+
+**Giải pháp của Senior:**
+- **Cách 1 - Xử lý tại Message Broker (Đảm bảo Routing FIFO):** 
+  - Nếu dùng Kafka: Đẩy `UserId` vào làm **Partition Key**. Kafka đảm bảo các message có cùng Key sẽ luôn đi vào cùng 1 Partition và được xử lý tuần tự bởi đúng 1 Consumer.
+  - Nếu dùng RabbitMQ: Dùng Plugin **Consistent Hash Exchange**, băm `UserId` để định tuyến các thao tác của cùng 1 User về cùng 1 Queue cụ thể.
+- **Cách 2 - Xử lý tại Database (Version / Timestamp Check):**
+  - Gắn thêm trường `CreatedAt` (Timestamp) vào mỗi Message.
+  - Khi Worker cập nhật CSDL, thay vì `UPDATE Profile SET Name = 'Nam'`, Senior viết: `UPDATE Profile SET Name = 'Nam' WHERE UserId = 123 AND UpdatedAt < @MessageTimestamp`.
+  - Nếu Message "Hải" (tạo lúc 10:05) đã ghi DB, thì khi Message "Nam" (tạo lúc 10:00) chạy tới, điều kiện `WHERE` sẽ thất bại. Dữ liệu cũ bị vứt bỏ một cách an toàn mà không ghi đè lên dữ liệu mới.
+
+### Q14: Bất đồng bộ Cache cục bộ (State Drift) khi Scale-out hệ thống Monolith
+**Vấn đề doanh nghiệp hay mắc:**
+- Cấu hình hệ thống (như phí giao hàng, trạng thái bảo trì) được lưu trong `IMemoryCache` (Cache trên RAM của Server) để truy xuất tức thời.
+- Hệ thống phát triển mạnh, công ty quyết định Scale-out chạy 3 instances của ứng dụng Monolith này đằng sau một Load Balancer.
+- **Hậu quả:** Admin cập nhật phí giao hàng mới. Request cập nhật lọt vào Instance A, Instance A xóa/cập nhật `IMemoryCache` của chính nó. Nhưng Instance B và C hoàn toàn không biết gì, vẫn dùng phí giao hàng cũ. Khách hàng F5 trang web, lúc thì thấy phí cũ, lúc thấy phí mới (do Load Balancer chia đều traffic). Hệ thống sai lệch luồng tiền nghiêm trọng.
+
+**Giải pháp của Senior:**
+- **Cách 1 (Distributed Cache):** Bỏ `IMemoryCache`, chuyển sang dùng Redis (`IDistributedCache`). Khi đó cả 3 instances cùng đọc/ghi chung 1 nguồn duy nhất trên mạng, đảm bảo đồng nhất tuyệt đối. Nhược điểm là chậm hơn truy cập RAM nội bộ một chút.
+- **Cách 2 (Hybrid Cache / Backplane):** Vẫn dùng `IMemoryCache` ở tầng mỗi server để đạt tốc độ nano-giây (siêu nhanh). Nhưng khi Admin cập nhật trên Instance A, Instance A sẽ đẩy một thông điệp (Message) `"InvalidateCache"` vào Redis Pub/Sub. Instance B và C đang lắng nghe (Subscribe) kênh này sẽ nhận được lệnh và tự động xóa bộ nhớ đệm RAM nội bộ của chúng để đi lấy dữ liệu mới.
+
+### Q15: Vỡ/Mất dữ liệu ngầm khi Server bị Recycle / Restart đột ngột (Thiếu Graceful Shutdown)
+**Vấn đề doanh nghiệp hay mắc:**
+- Lập trình viên viết một tác vụ ngầm (Background Service) làm nhiệm vụ chạy chốt lương nhân viên, quá trình này mất khoảng 10 phút.
+- Giữa lúc đang chạy được 5 phút, IIS tự động Recycle App Pool (theo cấu hình mặc định là 29 tiếng/lần) hoặc Kỹ sư DevOps thao tác Restart Container để deploy bản mới.
+- **Hậu quả:** Tiến trình bị giết (Kill) ngang xương. Bản ghi tính lương đang ghi dở vào CSDL bị đứt đoạn, sinh ra dữ liệu rác (Corrupted Data), một số người được cộng tiền, một số người thì không, và mất hoàn toàn tiến trình không thể tự khôi phục lại.
+
+**Giải pháp của Senior:**
+- **Luôn truyền `CancellationToken`:** Mọi hàm async kéo dài (gọi CSDL, vòng lặp) đều phải nhận vào `CancellationToken` được cấp bởi .NET Host.
+- Khi HĐH gửi tín hiệu tắt máy (SIGTERM), .NET sẽ không cắt điện ngay lập tức. Nó sẽ chuyển cờ `CancellationToken.IsCancellationRequested` thành `true` và đợi tối đa 5-30 giây.
+- Mã nguồn của Senior sẽ kiểm tra: `if (token.IsCancellationRequested) { SaveCheckpoint(); break; }`. Tức là chủ động lưu lại mốc (nhân viên cuối cùng đã tính lương), sau đó thoát vòng lặp một cách an toàn (Graceful Shutdown). Ở lần khởi động sau, ứng dụng đọc lại Checkpoint và làm tiếp từ đó.
+
+### Q16: Hiện tượng "Hàng xóm ồn ào" (Noisy Neighbor) ngay bên trong một App Monolith
+**Vấn đề doanh nghiệp hay mắc:**
+- Ứng dụng nguyên khối (Monolith) chứa tất cả logic: từ đăng nhập, xem giỏ hàng (cần tốc độ mili-giây) cho đến xuất báo cáo Excel 1 triệu dòng (cần rất nhiều CPU và RAM).
+- **Hậu quả:** Khi một nhân viên Kế toán bấm nút xuất báo cáo cuối tháng, tiến trình này "ăn" trọn 100% CPU và chiếm dụng 5GB RAM của Server. Hàng ngàn khách hàng bên ngoài đang lướt Web để mua hàng bỗng nhiên bị đứng hình (Timeout) vì Web Server không còn tài nguyên I/O và CPU để phản hồi request của họ.
+
+**Giải pháp của Senior (Resource Isolation trong Monolith):**
+- Ngay cả khi chưa "đập đi xây lại" thành Microservices, Senior vẫn áp dụng nguyên lý cô lập tài nguyên:
+  - Vẫn giữ nguyên 1 Repository (Monorepo), dùng chung 1 Codebase.
+  - Nhưng lúc **Deploy**, tách làm 2 con Server riêng biệt.
+  - **Server 1 (Web API Role):** Chỉ hứng HTTP Request. Nếu gặp lệnh xuất báo cáo, nó ghi vào DB hoặc ném Message vào Hangfire/Queue rồi trả về màn hình Kế toán: `"Báo cáo đang được tạo..."`.
+  - **Server 2 (Background Worker Role):** Tắt toàn bộ cổng HTTP, chỉ chạy Background Service để cắm đầu kéo Job từ Hangfire ra xuất báo cáo. Chị kế toán bấm 10 cái báo cáo thì Server 2 có bị ngốn 100% CPU cũng kệ nó, không ảnh hưởng một milimet nào đến tốc độ của Server 1 đang phục vụ khách hàng.
