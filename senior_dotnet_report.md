@@ -198,25 +198,50 @@ Nếu chỉ dựa vào Database, chúng ta có 2 cách tiếp cận để chặn
 
 #### Tầng 2: Đưa chốt chặn lên RAM với Redis (Bảo vệ Database)
 Để không làm sập Database với 10.000 request, ta phải chặn chúng ở Redis. Trước Flash Sale, nạp tồn kho lên Redis: `await _redisDb.StringSetAsync("product_stock:1", 100);`.
-Khi Flash sale diễn ra, ta có 2 cách trừ kho nguyên tử trên Redis:
-- **Cách 1: Trừ kho trực tiếp (Không dùng Lua Script)**
-  - Dùng hàm `StringDecrementAsync`, thao tác này nguyên tử (atomic): trừ 1 và trả về giá trị mới ngay lập tức.
-  - *Code:* `long remainingStock = await _redisDb.StringDecrementAsync("product_stock:1");`
-  - Nếu `remainingStock >= 0` $\rightarrow$ Cho phép đi tiếp. Nếu `< 0` $\rightarrow$ Trả về lỗi "Hết hàng" (HTTP 400).
-- **Cách 2: Dùng Lua Script (Kiểm soát chặt chẽ & Hỗ trợ mua nhiều sản phẩm)**
-  - Redis chạy đơn luồng (single-threaded). Bằng cách gửi một đoạn Lua Script, Redis sẽ thực thi khối code đó nguyên tử từ đầu đến cuối mà không bị can thiệp bởi request khác. Vô cùng hữu ích khi user muốn mua số lượng > 1 (VD: mua 2 sản phẩm cùng lúc).
-  - *Lua Script:*
-    ```lua
-    local stock = tonumber(redis.call('GET', KEYS[1]))
-    local requested_qty = tonumber(ARGV[1])
-    if not stock or stock < requested_qty then
-        return 0 -- Không đủ hàng
-    else
-        redis.call('DECRBY', KEYS[1], requested_qty)
-        return 1 -- Trừ thành công
-    end
-    ```
-  - *Lợi ích:* Kiểm tra chính xác số lượng tồn so với số lượng mua, đảm bảo kho không bao giờ rớt xuống số âm. Trả về chính xác 1 (thành công) hoặc 0 (thất bại).
+Khi Flash sale diễn ra, ta có 2 cách tiếp cận để trừ kho nguyên tử trên Redis. Dưới góc độ của một Senior/Architect, **`ScriptEvaluateAsync` (Lua Script) gần như là lựa chọn bắt buộc cho hệ thống Flash Sale thực tế**. Dưới đây là phân tích chuyên sâu về lý do tại sao:
+
+**Cách 1: Dùng `StringDecrementAsync` (Hàm trừ trực tiếp)**
+Đây là hàm gọi trực tiếp lệnh `DECR` hoặc `DECRBY` của Redis. Nó thực hiện nguyên tử (atomic) việc trừ đi một số và lập tức trả về giá trị sau khi trừ.
+
+*Cách hoạt động:*
+```csharp
+long remainingStock = await _redisDb.StringDecrementAsync("product_stock:1", requestedQty);
+if (remainingStock < 0) {
+    // Nếu rớt xuống số âm, tức là hết hàng. 
+    // Phải cộng trả lại kho (Rollback / Compensation)
+    await _redisDb.StringIncrementAsync("product_stock:1", requestedQty);
+    return BadRequest("Hết hàng");
+}
+return Ok("Thành công");
+```
+- *Ưu điểm:* Code cực kỳ đơn giản, dễ đọc. Tốc độ thực thi chớp nhoáng (nhanh hơn Lua Script một chút vì Redis không tốn công parse script).
+- *Tử huyệt (Tại sao không dùng cho Flash Sale):*
+  - **Vấn đề "Kho rớt xuống số âm" (Negative Stock):** Redis sẽ trừ vô tội vạ. Nếu kho có `5`, và 1.000 người cùng gọi hàm này, tồn kho trên Redis sẽ cắm đầu xuống `-995`.
+  - **Lỗ hổng Rollback:** Khi rớt xuống số âm, code C# của bạn phải gọi hàm `StringIncrementAsync` để cộng trả lại kho. Nhưng nếu ngay lúc đó Web Server bị crash, hoặc rớt mạng $\rightarrow$ Lệnh cộng trả lại không bao giờ được chạy $\rightarrow$ Kho bị âm vĩnh viễn, dữ liệu sai lệch.
+  - **Không kiểm tra được điều kiện phức tạp:** Không thể làm logic *"Chỉ cho phép 1 user mua 1 lần"*.
+
+**Cách 2: Dùng `ScriptEvaluateAsync` bằng Lua Script (Kiểm soát chặt chẽ - Best Practice)**
+Redis chạy đơn luồng (single-threaded). Bằng cách gửi một đoạn Lua Script, Redis sẽ thực thi khối code đó nguyên tử từ đầu đến cuối mà không bị can thiệp bởi request khác. Vô cùng hữu ích khi user muốn mua số lượng > 1.
+
+*Lua Script (Ví dụ)*:
+```lua
+local stock = tonumber(redis.call('GET', KEYS[1]))
+local qty = tonumber(ARGV[1])
+
+if stock >= qty then
+    redis.call('DECRBY', KEYS[1], qty)
+    return 1 -- Thành công
+else
+    return 0 -- Thất bại (Kho giữ nguyên, không bị âm)
+end
+```
+- *Ưu điểm vượt trội:*
+  - **Logic "Check-then-Act" nguyên tử 100%:** Trong C#, nếu bạn gọi `StringGetAsync` kiểm tra rồi mới gọi `StringDecrementAsync`, sẽ có hàng ngàn thread chen ngang (Race Condition). Với Lua Script, Redis đóng gói toàn bộ `GET` $\rightarrow$ `IF` $\rightarrow$ `DECRBY` thành **1 giao dịch duy nhất**. Không request nào được chen ngang.
+  - **Kho không bao giờ bị âm:** Nhờ kiểm tra `IF stock >= qty` trước khi trừ, kho sẽ dừng lại chính xác ở số `0`. Không bao giờ phải viết code bù trừ (Rollback) như Cách 1.
+  - **Dễ dàng mở rộng nghiệp vụ:** Trong thực tế, Flash Sale không chỉ là trừ kho. Bạn cần kiểm tra xem User này đã mua chưa (tránh đầu cơ). Bằng Lua Script, bạn có thể check tồn kho, check User trong Set, trừ kho, và nhét vào hàng đợi (Redis Streams) **cùng một lúc**. Cách 1 hoàn toàn bất lực trước yêu cầu này.
+- *Lưu ý (Nhược điểm):* Phải học cú pháp Lua cơ bản. Nếu logic quá phức tạp sẽ block Redis. Với script ngắn (như check tồn kho), thời gian chạy chỉ tính bằng micro-giây.
+
+*(Kết luận: Chỉ dùng `StringDecrementAsync` cho các tác vụ như Rate Limiting API đếm số lượng không đòi hỏi tính chính xác tuyệt đối. Bắt buộc dùng `ScriptEvaluateAsync` cho Flash Sale, giữ chỗ hoặc các nghiệp vụ cần kiểm tra điều kiện trước khi Update)*.
 
 #### Tầng 3: Xếp hàng với Message Queue (RabbitMQ hoặc Redis Streams) & Cập nhật UI
 - **API (Producer):** Những người lọt qua được cửa ải Redis ở Tầng 2 (chỉ có 5 người) sẽ được Backend đưa vào một hàng đợi. 
