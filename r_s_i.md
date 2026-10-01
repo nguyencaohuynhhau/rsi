@@ -3405,3 +3405,121 @@ Xử lý string replacement thumbnail song song trên nhiều thread — tận d
 > - `.AsSubQuery()` — Ép EF tạo derived table / subquery
 > 
 > Những method này **không có trong EF Core vanilla** — nếu không dùng Thinktecture, bạn phải viết raw SQL.
+
+
+Hai bên không thay thế nhau. sdlc-fnb là phiên bản chuyên cho phần mềm, đã có máy kiểm chặn. Workflow-Framework là khung điều phối chung, dùng cho mọi loại việc. Để xây SaaS F&B, nên dùng **sdlc-fnb cho phần code** và **Workflow-Framework cho phần việc ngoài code**.
+
+
+
+**AI-Native SDLC** mô tả *cách quy trình được thiết kế*. Ba khái niệm còn lại mô tả *mức con người tham gia vào vòng lặp*. Một quy trình AI-Native SDLC có thể dùng cả ba mức, mỗi bước một mức.
+
+## Bốn khái niệm
+
+| Khái niệm | Ý nghĩa | Ai phải hành động thì việc mới đi tiếp |
+|---|---|---|
+| **AI-Native SDLC** | Vòng đời phát triển phần mềm thiết kế quanh AI agent ngay từ đầu. AI làm phần lớn việc, con người đặt mục tiêu và duyệt. Hiện vật (intent, spec, plan) là văn bản để agent đọc, cổng chất lượng do máy kiểm. | Không phải một mức tự chủ. Đây là hình dạng của quy trình. |
+| **Human-in-the-loop (HITL)** | Con người là một mắt xích bắt buộc. AI dừng ở các điểm chốt và chờ người duyệt. | **Con người.** Người không duyệt thì việc đứng yên. |
+| **Human-on-the-loop (HOTL)** | AI tự chạy, con người giám sát và có quyền chặn hoặc sửa khi thấy sai. | **Không ai cả.** Việc mặc định đi tiếp, người chỉ can thiệp khi cần. |
+| **Autonomous** (human-out-of-the-loop) | Lúc chạy không có người. Con người chỉ đặt mục tiêu trước và xem kết quả sau. | **Không ai cả**, và cũng không có điểm nào để chặn giữa chừng. |
+
+Câu "Humans on the Loop: đứng ngoài xem AI" chưa chính xác lắm. HOTL không phải đứng xem suông: người giám sát **có quyền chặn**. Nếu chỉ xem mà không chặn được thì thực chất đó là autonomous.
+
+HITL được coi là cách phổ biến nhất hiện nay vì trách nhiệm cuối cùng vẫn thuộc về con người: ai ký duyệt thì người đó chịu trách nhiệm. Mức tin tưởng vào AI cũng chưa đủ để bỏ hẳn các điểm duyệt.
+
+## Áp vào hai dự án
+
+**Dự án hiện tại (Workflow-Framework-WorkWithAI)** là framework điều phối task bằng Markdown, dùng được cho mọi ngành. Nó **không phải** một AI-Native SDLC vì không riêng cho phần mềm và không có cổng do máy kiểm.
+- **HITL** ở các điểm chốt:
+  - user xác nhận requirement;
+  - gate PLAN, chỉ qua khi user xác nhận rõ ràng (vừa sửa trong `051788e`);
+  - review bắt buộc (APPROVED/REVISE) với việc rủi ro;
+  - anti-loop: bế tắc thì escalate cho người.
+- **Autonomous** bên trong từng gói việc đã duyệt: agent tự làm, tự ghi tracking.
+- Cổng nằm ở *luật agent đọc*, không phải script ép. Agent không tuân thủ thì không gì chặn được.
+
+**sdlc-fnb** là **một hiện thực AI-Native SDLC** cụ thể cho một dự án phần mềm, kết hợp cả ba mức:
+- **HITL ở các chốt:**
+  - chốt 1: duyệt intent;
+  - chốt 2: duyệt spec + plan;
+  - chốt 2.5: duyệt design;
+  - chốt 3: review trên dev;
+  - ship production chỉ sau khi PR đã merge.
+
+  Quy tắc "Duyệt = con người tự gõ lệnh bước kế" chính là định nghĩa HITL.
+- **Autonomous ở đoạn build → verify:**
+  - sub-agent làm song song trong worktree;
+  - build tự gọi `/sdlc:verify`;
+  - cổng commit do máy ép ("kiểm thử tự trị").
+
+  Đoạn này không cần người vì máy đã kiểm thay.
+- **HOTL ở hai chỗ:**
+  - Verify xanh thì tự deploy lên **dev**. Người xem kết quả trên dev và có thể bác ở chốt 3.
+  - Hook Stop nhắc bước kế, người theo dõi.
+
+Tóm lại: dự án hiện tại cung cấp **khung điều phối chung** với các gate HITL dạng luật. sdlc-fnb dùng ý tưởng đó để dựng **một AI-Native SDLC cho phần mềm**. Trong đó HITL dành cho các quyết định (làm gì, làm thế nào, có ship không), còn phần thực thi chạy autonomous hoặc HOTL, có máy kiểm chặn.
+
+## Workflow-Framework-WorkWithAI (dự án hiện tại)
+
+**Ưu điểm**
+- **Nhẹ, dựng nhanh:** chỉ cần rule, skill và tracking bằng Markdown. Không có script nào phải bảo trì.
+- **Dùng được cho mọi ngành:** làm SaaS còn rất nhiều việc không phải code, và khung này hợp với chúng:
+  - nghiên cứu thị trường quán và chuỗi F&B;
+  - định giá gói;
+  - quy trình onboarding nhà hàng;
+  - hoá đơn điện tử và thuế;
+  - tài liệu hướng dẫn và nội dung marketing.
+- **Chạy được trên nhiều IDE và model:** Claude, Antigravity, Gemini.
+- **Mức độ linh hoạt:** chia Simple/Medium/Complex, nên việc nhỏ không phải đi đủ quy trình.
+- **Dễ làm tiếp và rút kinh nghiệm:** `tracking.md` giúp dừng giữa chừng rồi làm tiếp, có phần ghi lessons.
+
+**Nhược điểm khi dùng để xây sản phẩm**
+- **Cổng chỉ là luật để agent đọc:** không có script hay hook ép. Agent bỏ qua bước test thì không gì chặn được.
+- **Thiếu toàn bộ phần cơ khí của SDLC:**
+  - verify theo phạm vi thay đổi;
+  - lint ratchet cho code cũ;
+  - e2e tự bật khi chạm vùng nhạy cảm (đơn hàng, trừ kho);
+  - `requiredTests` chống hồi quy;
+  - CI;
+  - deploy dev/prod.
+
+  Muốn có thì phải tự xây, tức là xây lại sdlc-fnb.
+- **Đơn vị quản lý là task, không phải sản phẩm:** không có backlog intent, không truy được chuỗi intent → spec → PR → bản deploy.
+- **Không có pha thiết kế UI** gắn với design system và Stitch.
+
+## AI-Native SDLC (sdlc-fnb)
+
+**Ưu điểm**
+- **Đúng domain và stack:** 3 workspace backend, admin và online-store; e2e triggers đặt đúng các vùng rủi ro F&B như `orders` và trừ kho.
+- **Máy kiểm thật, có hai lớp:**
+  - cổng pre-commit dùng dấu vân tay nội dung;
+  - CI chạy lại evals, quét secret và audit dependency, lint/build/test theo từng workspace, và bắt PR phải tham chiếu `docs/intents/<id>/`.
+- **Truy vết đầy đủ:** intent → spec (có ADR) → plan → PR → evidence → deploy. Rất cần khi SaaS có khách trả tiền và phải giải thích được vì sao một thay đổi xảy ra.
+- **HITL đặt đúng chỗ:** con người duyệt "làm gì / làm thế nào / có ship không", còn build và verify chạy tự động.
+- **Đã chạy thật:** 27 intent, trong đó có đủ các mảng POS, kho, storefront, phiên đăng nhập.
+- **Hợp với code cũ:** lint ratchet và baseline nên không bị đỏ ngay ngày đầu.
+
+**Nhược điểm**
+- **Thủ tục nặng cho việc nhỏ:** intent `size: S` vẫn đi đủ chuỗi intent → spec → plan → build → verify. Sửa một chữ hay một màu cũng phải qua nhiều bước.
+- **Bộ máy là code, nên cũng có bug:** vừa rồi tìm ra 3 lỗi trong luồng verify (chạy 2 lần, xanh mà không chạy cổng nào, lệch dấu vân tay khi dùng `--since`). Ai đó phải sở hữu và bảo trì `scripts/sdlc/`.
+- **Nghiêng về Claude Code:** các lệnh `/sdlc:*` nằm ở `.claude/commands/`. IDE khác chỉ có `AGENTS.md`, rule và git hook, không có workflow tương đương.
+- **Chỉ phủ phần giao phần mềm:** chưa có quy trình cho các mặt vận hành của một SaaS:
+  - onboarding tenant;
+  - billing;
+  - xử lý sự cố production, kèm rollback và postmortem;
+  - hỗ trợ khách hàng;
+  - migration dữ liệu nhiều tenant.
+- **Cổng chỉ mạnh bằng chất lượng test:** test yếu thì cổng xanh vẫn có thể có bug.
+
+## Đề xuất cho SaaS F&B
+
+| Loại việc | Dùng |
+|---|---|
+| Tính năng, sửa lỗi, refactor code | **sdlc-fnb** |
+| Nghiên cứu, định giá, pháp lý/thuế, SOP onboarding nhà hàng, nội dung, tài liệu | **Workflow-Framework** |
+| Sự cố production, migration dữ liệu tenant | Viết thêm vào sdlc-fnb, dùng mẫu escalation/anti-loop của Workflow-Framework |
+
+Nếu dùng song song, nên bổ sung 2 điểm cho sdlc-fnb:
+1. **Làn nhanh cho việc rất nhỏ:** bỏ qua spec và plan, nhưng vẫn qua verify và CI.
+2. **Quy trình hotfix/sự cố:** hiện chỉ có `SDLC_SKIP_VERIFY_GATE=1`, chưa có quy trình đi kèm.
+
+Bạn muốn tôi làm điểm nào thì báo.
